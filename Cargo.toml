@@ -1,0 +1,56 @@
+[package]
+authors = ["hjeldin"]
+edition = "2018"
+readme = "README.md"
+name = "stm-blink"
+version = "0.1.0"
+
+[dependencies]
+embassy-stm32 = { version = "0.1.0", features = [ "defmt", "memory-x", "stm32f030r8", "time-driver-any", "exti", "unstable-pac"] }
+cortex-m = { version = "0.7.6", features = ["critical-section-single-core"]}
+cortex-m-rt = "0.7.0"
+cortex-m-semihosting = "0.3.3"
+defmt = "0.3.10"
+defmt-rtt = "0.4.1"
+panic-halt = "0.2.0"
+# stm32f0xx-hal = { version = "0.14.1", features = ["stm32f030x8", "rt"] }
+# ens160 = { version = "0.6", default-features = false }
+embassy-sync = { version = "0.6.1", features = ["defmt"] }
+embassy-executor = { version = "0.6.3", features = ["arch-cortex-m", "executor-thread", "executor-interrupt", "defmt", "integrated-timers"] }
+embassy-time = { version = "0.3.2", features = ["defmt", "defmt-timestamp-uptime", "tick-hz-32_768"] }
+static_cell = "2"
+portable-atomic = { version = "1.5", features = ["unsafe-assume-single-core"] }
+panic-probe = { version = "0.3.2", features = ["defmt"] }
+embedded-hal-async = "1.0.0"
+flip-link = "0.1.9"
+
+[patch.crates-io]
+embassy-time = { git = "https://github.com/embassy-rs/embassy", rev = "9ff8c70009233d4ea05208e3aa649c5b15512cab" }
+embassy-sync = { git = "https://github.com/embassy-rs/embassy", rev = "9ff8c70009233d4ea05208e3aa649c5b15512cab" }
+embassy-executor = { git = "https://github.com/embassy-rs/embassy", rev = "9ff8c70009233d4ea05208e3aa649c5b15512cab" }
+embassy-stm32 = { git = "https://github.com/embassy-rs/embassy", rev = "9ff8c70009233d4ea05208e3aa649c5b15512cab" }
+# dive-deco = "5.0.0"
+
+# Uncomment for the panic example.
+# panic-itm = "0.4.1"
+
+# Uncomment for the allocator example.
+# alloc-cortex-m = "0.4.0"
+
+# Uncomment for the device example.
+# Update `memory.x`, set target to `thumbv7em-none-eabihf` in `.cargo/config`,
+# and then use `cargo build --example device` to build it.
+# [dependencies.stm32f3]
+# features = ["stm32f303", "rt"]
+# version = "0.7.1"
+
+# this lets you use `cargo fix`!
+[[bin]]
+name = "stm-blink"
+test = false
+bench = false
+
+[profile.release]
+codegen-units = 1 # better optimizations
+debug = true # symbols are nice and they don't increase the size on Flash
+lto = true # better optimizations

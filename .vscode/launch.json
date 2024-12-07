@@ -1,0 +1,96 @@
+{
+    /* 
+     * Requires the Rust Language Server (rust-analyzer) and Cortex-Debug extensions
+     * https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer
+     * https://marketplace.visualstudio.com/items?itemName=marus25.cortex-debug
+     */
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "probe-rs-debug",
+            "request": "launch",
+            "name": "probe_rs Executable launch example",
+            "cwd": "${workspaceFolder}",
+            //!MODIFY (or remove)
+            "speed": 4600,
+            //!MODIFY (or remove)
+            "probe": "0483:374b",
+            "runtimeExecutable": "probe-rs",
+            "runtimeArgs": [
+                "dap-server"
+            ],
+            //!MODIFY
+            "chip": "STM32F030R8Tx",
+            "flashingConfig": {
+                "flashingEnabled": true,
+                "haltAfterReset": false,
+                "formatOptions": {
+                    //!MODIFY (or remove). Valid values are: 'bin', 'hex', 'elf'(default), 'idf'
+                    "binaryFormat": "bin"
+                }
+            },
+            "coreConfigs": [
+                {
+                    "coreIndex": 0,
+                    //!MODIFY
+                    "programBinary": "target/thumbv6m-none-eabi/release/stm-blink",
+                    //!MODIFY
+                    "svdFile": "Relative or fully qualified path to the CMSIS-SVD file for your target core"
+                }
+            ],
+            "env": {
+                //!MODIFY (or remove)
+                // If you set this variable, check the VSCode console log window for the location of the log file.
+                "RUST_LOG": "info"
+            },
+            // Info, Debug
+            "consoleLogLevel": "Console"
+        },
+        {
+            "type": "cortex-debug",
+            "request": "launch",
+            "name": "Debug (QEMU)",
+            "servertype": "qemu",
+            "cwd": "${workspaceRoot}",
+            "preLaunchTask": "Cargo Build (debug)",
+            "runToEntryPoint": "main",
+            "executable": "./target/thumbv7m-none-eabi/debug/stm-blink",
+            /* Run `cargo build --example hello` and uncomment this line to run semi-hosting example */
+            //"executable": "./target/thumbv7m-none-eabi/debug/examples/hello",
+            "cpu": "cortex-m3",
+            "machine": "lm3s6965evb",
+        },
+        {
+            /* Configuration for the STM32F303 Discovery board */
+            "type": "cortex-debug",
+            "request": "launch",
+            "name": "Debug (OpenOCD)",
+            "servertype": "openocd",
+            "cwd": "${workspaceRoot}",
+            "preLaunchTask": "Cargo Build (release)",
+            "runToEntryPoint": "main",
+            "executable": "./target/thumbv6m-none-eabi/release/stm-blink",
+            /* Run `cargo build --example itm` and uncomment this line to run itm example */
+            // "executable": "./target/thumbv7em-none-eabihf/debug/examples/itm",
+            "device": "STM32F303VCT6",
+            "configFiles": [
+                "interface/stlink.cfg",
+                "target/stm32f0x.cfg"
+            ],
+            "svdFile": "${workspaceRoot}/.vscode/STM32F0x8.svd",
+            "swoConfig": {
+                "enabled": true,
+                "cpuFrequency": 42000000,
+                "swoFrequency": 2000000,
+                "source": "probe",
+                "decoders": [
+                    {
+                        "type": "console",
+                        "label": "ITM",
+                        "port": 0
+                    }
+                ]
+            }
+        }
+    ]
+}

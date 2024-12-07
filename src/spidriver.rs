@@ -24,11 +24,16 @@ impl<'a> SPIDriver<'a> {
 
     pub async fn reset(&self) {
         let mut rst = self.rst.lock().await;
+        rst.set_high();
         Timer::after_millis(200).await;
         rst.set_low();
         Timer::after_millis(200).await;
         rst.set_high();
         Timer::after_millis(200).await;
+    }
+
+    pub async fn sleep(&self) {
+        self.write_command(&[0x10]).await;
     }
 
     pub async fn write_command(&self, byte: &[u8]) {

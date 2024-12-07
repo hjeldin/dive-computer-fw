@@ -125,11 +125,11 @@ async fn main(spawner: Spawner) {
     };
     spi_config.frequency = Hertz(16_000_000);
 
-    let spi = Spi::new_blocking_txonly(
+    let spi = Spi::new_blocking(
         p.SPI2,
         p.PB13, //SCK
         p.PB15, //MOSI
-        // p.PB14,  //MISO
+        p.PB14,  //MISO
         // p.DMA1_CH5,
         // p.DMA1_CH4,
         spi::Config::default(),
@@ -138,9 +138,10 @@ async fn main(spawner: Spawner) {
     let cs = p.PA8;
     let dc = p.PA9;
     let rst = p.PA3;
-    let cs = Output::new(cs, Level::High, Speed::VeryHigh);
+    let mut cs = Output::new(cs, Level::High, Speed::VeryHigh);
     let dc = Output::new(dc, Level::High, Speed::VeryHigh);
-    let rst = Output::new(rst, Level::High, Speed::VeryHigh);
+    let mut rst = Output::new(rst, Level::High, Speed::VeryHigh);
+    rst.set_low();
 
     let static_i2c = SHARED_I2C.init(Mutex::new(i2c1));
     let static_spi = SHARED_SPI.init(Mutex::new(spi));
@@ -153,9 +154,9 @@ async fn main(spawner: Spawner) {
 
     let ens160_driver = I2CDriver::new(static_i2c, 0x53);
 
-    spawner.spawn(ens160::ens_task(ens160_driver)).unwrap();
+    // spawner.spawn(ens160::ens_task(ens160_driver)).unwrap();
 
-    spawner.spawn(bmp280::bmp_task(bmp280_driver)).unwrap();
+    // spawner.spawn(bmp280::bmp_task(bmp280_driver)).unwrap();
 
     spawner.spawn(ili9341::screen_task(spidriver)).unwrap();
 
@@ -170,6 +171,7 @@ async fn main(spawner: Spawner) {
     // Timer::after_millis(200).await;
     // rst.set_high();
     // Timer::after_millis(200).await;
+    cs.set_low();
 
     loop {
         // defmt::info!("loop");
@@ -184,6 +186,12 @@ async fn main(spawner: Spawner) {
         }
         // Updated delay value to global context
         LCD_DUTY_CYCLE.store(del_var, Ordering::Relaxed);
+        let mut d = static_rst.lock().await;
+        if d.is_set_high() {
+            d.set_low();
+        } else {
+            d.set_high();
+        }
     }
 }
 

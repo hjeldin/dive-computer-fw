@@ -80,75 +80,80 @@ impl<'a> ILI9341<'a> {
 
     pub async fn init(&self) {
         self.driver.reset().await;
-        self.driver.write_command(&[ili9341regs::SLEEP_OUT]).await;
-        self.driver.write_command(&[0x21]).await;
-        self.driver
-            .write_command(&[ili9341regs::POWER_CONTROL_B])
-            .await;
-        self.driver.write_data(&[0x00, 0xC1, 0x30]).await;
-        self.driver
-            .write_command(&[ili9341regs::POWER_ON_SEQ_CONTROL])
-            .await;
-        self.driver.write_data(&[0x64, 0x03, 0x12, 0x81]).await;
-        self.driver
-            .write_command(&[ili9341regs::DRIVER_TIMING_CONTROL_A])
-            .await;
-        self.driver.write_data(&[0x85, 0x00, 0x79]).await;
-        self.driver
-            .write_command(&[ili9341regs::POWER_CONTROL_A])
-            .await;
-        self.driver
-            .write_data(&[0x39, 0x2C, 0x00, 0x34, 0x02])
-            .await;
-        self.driver
-            .write_command(&[ili9341regs::PUMP_RATIO_CONTROL])
-            .await;
-        self.driver.write_data(&[0x20]).await;
-        self.driver
-            .write_command(&[ili9341regs::DRIVER_TIMING_CONTROL_B])
-            .await;
-        self.driver.write_data(&[0x00, 0x00]).await;
-        self.driver
-            .write_command(&[ili9341regs::POWER_CONTROL_1])
-            .await;
-        self.driver.write_data(&[0x1D]).await;
-        self.driver
-            .write_command(&[ili9341regs::POWER_CONTROL_2])
-            .await;
-        self.driver.write_data(&[0x12]).await;
-        self.driver
-            .write_command(&[ili9341regs::VCOM_CONTROL_1])
-            .await;
-        self.driver.write_data(&[0x33, 0x3F]).await;
-        self.driver
-            .write_command(&[ili9341regs::VCOM_CONTROL_2])
-            .await;
-        self.driver.write_data(&[0x92]).await;
-        self.driver
-            .write_command(&[ili9341regs::PIXEL_FORMAT_SET])
-            .await;
-        self.driver.write_data(&[0x55]).await;
-        self.driver
-            .write_command(&[ili9341regs::MEMORY_ACCESS_CONTROL])
-            .await;
-        self.driver
-            .write_data(&[self.memory_access_control_value()])
-            .await;
-        self.driver
-            .write_command(&[ili9341regs::FRAME_CONTROL_NORMAL_MODE])
-            .await;
-        self.driver.write_data(&[0x00, 0x12]).await;
-        self.driver
-            .write_command(&[ili9341regs::DISPLAY_FUNCTION_CONTROL])
-            .await;
-        self.driver.write_data(&[0x0A, 0xA2]).await;
-        self.driver
-            .write_command(&[ili9341regs::SET_TEAR_SCANLINE])
-            .await;
-        self.driver.write_data(&[0x02]).await;
-        self.driver.write_command(&[ili9341regs::DISPLAY_ON]).await;
+        // self.driver.write_command(&[ili9341regs::SLEEP_OUT]).await;
+        // self.driver.write_command(&[0x21]).await;
+        // self.driver
+        //     .write_command(&[ili9341regs::POWER_CONTROL_B])
+        //     .await;
+        // self.driver.write_data(&[0x00, 0xC1, 0x30]).await;
+        // self.driver
+        //     .write_command(&[ili9341regs::POWER_ON_SEQ_CONTROL])
+        //     .await;
+        // self.driver.write_data(&[0x64, 0x03, 0x12, 0x81]).await;
+        // self.driver
+        //     .write_command(&[ili9341regs::DRIVER_TIMING_CONTROL_A])
+        //     .await;
+        // self.driver.write_data(&[0x85, 0x00, 0x79]).await;
+        // self.driver
+        //     .write_command(&[ili9341regs::POWER_CONTROL_A])
+        //     .await;
+        // self.driver
+        //     .write_data(&[0x39, 0x2C, 0x00, 0x34, 0x02])
+        //     .await;
+        // self.driver
+        //     .write_command(&[ili9341regs::PUMP_RATIO_CONTROL])
+        //     .await;
+        // self.driver.write_data(&[0x20]).await;
+        // self.driver
+        //     .write_command(&[ili9341regs::DRIVER_TIMING_CONTROL_B])
+        //     .await;
+        // self.driver.write_data(&[0x00, 0x00]).await;
+        // self.driver
+        //     .write_command(&[ili9341regs::POWER_CONTROL_1])
+        //     .await;
+        // self.driver.write_data(&[0x1D]).await;
+        // self.driver
+        //     .write_command(&[ili9341regs::POWER_CONTROL_2])
+        //     .await;
+        // self.driver.write_data(&[0x12]).await;
+        // self.driver
+        //     .write_command(&[ili9341regs::VCOM_CONTROL_1])
+        //     .await;
+        // self.driver.write_data(&[0x33, 0x3F]).await;
+        // self.driver
+        //     .write_command(&[ili9341regs::VCOM_CONTROL_2])
+        //     .await;
+        // self.driver.write_data(&[0x92]).await;
+        // self.driver
+        //     .write_command(&[ili9341regs::PIXEL_FORMAT_SET])
+        //     .await;
+        // self.driver.write_data(&[0x55]).await;
+        // self.driver
+        //     .write_command(&[ili9341regs::MEMORY_ACCESS_CONTROL])
+        //     .await;
+        // self.driver
+        //     .write_data(&[self.memory_access_control_value()])
+        //     .await;
+        // self.driver
+        //     .write_command(&[ili9341regs::FRAME_CONTROL_NORMAL_MODE])
+        //     .await;
+        // self.driver.write_data(&[0x00, 0x12]).await;
+        // self.driver
+        //     .write_command(&[ili9341regs::DISPLAY_FUNCTION_CONTROL])
+        //     .await;
+        // self.driver.write_data(&[0x0A, 0xA2]).await;
+        // self.driver
+        //     .write_command(&[ili9341regs::SET_TEAR_SCANLINE])
+        //     .await;
+        // self.driver.write_data(&[0x02]).await;
+        // self.driver.write_command(&[ili9341regs::DISPLAY_ON]).await;
 
-        self.set_gamma().await;
+        // self.set_gamma().await;
+        self.driver.sleep().await;
+        self.driver.sleep().await;
+        self.driver.sleep().await;
+        self.driver.sleep().await;
+        self.driver.sleep().await;
     }
 
     pub async fn set_gamma(&self) {

@@ -31,21 +31,6 @@ mod ms5837;
 static LCD_DUTY_CYCLE: AtomicU16 = AtomicU16::new(0);
 static LCD_MAX_DUTY_CYCLE: AtomicU16 = AtomicU16::new(0);
 
-// #[embassy_executor::task]
-// async fn led_task(led: AnyPin) {
-//     // Configure the LED pin as a push pull output and obtain handler.
-//     // On the Nucleo F091RC there's an on-board LED connected to pin PA5.
-//     let mut led: Output<'_> = Output::new(led, Level::Low, Speed::Low);
-
-//     loop {
-//         let del = BLINK_MS.load(Ordering::Relaxed);
-//         info!("Value of del is {}", del);
-//         Timer::after_millis(del.into()).await;
-//         info!("LED toggling");
-//         led.toggle();
-//     }
-// }
-
 #[embassy_executor::task]
 async fn pwm_task(
     pwm_pin: PA10,

@@ -146,14 +146,14 @@ impl<'a> MS5837<'a> {
 }
 
 #[embassy_executor::task]
-pub async fn ms5837_task(sensor: I2CDriver<'static>, state: &'static mut Mutex<ThreadModeRawMutex, crate::state::State>) {
+pub async fn ms5837_task(sensor: I2CDriver<'static>) {
     let mut ms5837_sensor = MS5837::new(sensor);
     ms5837_sensor.init().await;
     loop{
         let result = ms5837_sensor.calculate_temperature_pression(ms5837regs::Resolution::Osr256).await;
         defmt::info!("Pressure: {} Temperature: {}", result.0, result.1);
 
-        let mut state = state.lock().await;
+        let mut state = crate::STATE.lock().await;
         state.pressure = result.0;
         state.temperature = result.1;
         Timer::after_millis(1000).await;

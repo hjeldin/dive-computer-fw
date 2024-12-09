@@ -68,7 +68,11 @@ bind_interrupts!(struct Irqs {
 });
 
 
-static STATE: StaticCell<Mutex<ThreadModeRawMutex, state::State>> = StaticCell::new();
+pub static STATE: Mutex<ThreadModeRawMutex, state::State> = Mutex::new(state::State {
+    time: [0; 4],
+    pressure: 0.0,
+    temperature: 0.0,
+});
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
@@ -139,24 +143,18 @@ async fn main(spawner: Spawner) {
 
     let spidriver = spidriver::SPIDriver::new(static_spi, static_dc, static_rst);
 
-    let bmp280_driver = I2CDriver::new(static_i2c, 0x76);
+    // let bmp280_driver = I2CDriver::new(static_i2c, 0x76);
 
-    let ens160_driver = I2CDriver::new(static_i2c, 0x53);
+    // let ens160_driver = I2CDriver::new(static_i2c, 0x53);
 
-    // let ms5837_driver = I2CDriver::new(static_i2c, 0x76);
+    let ms5837_driver = I2CDriver::new(static_i2c, 0x76);
 
-    spawner.spawn(ens160::ens_task(ens160_driver)).unwrap();
+    // spawner.spawn(ens160::ens_task(ens160_driver)).unwrap();
 
-    spawner.spawn(bmp280::bmp_task(bmp280_driver)).unwrap();
+    // spawner.spawn(bmp280::bmp_task(bmp280_driver)).unwrap();
 
-    let static_state = STATE.init(Mutex::new(state::State {
-        time: [0; 4],
-        pressure: 0.0,
-        temperature: 0.0,
-    }));
-
-    spawner.spawn(ili9341::screen_task(spidriver, static_state)).unwrap();
-    // spawner.spawn(ms5837::ms5837_task(ms5837_driver, static_state)).unwrap();
+    spawner.spawn(ili9341::screen_task(spidriver)).unwrap();
+    spawner.spawn(ms5837::ms5837_task(ms5837_driver)).unwrap();
 
     // spawner.spawn(decotask::deco_task()).unwrap();
 

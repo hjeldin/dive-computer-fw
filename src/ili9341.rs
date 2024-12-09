@@ -366,7 +366,7 @@ pub fn color_buffer<const N: usize>(color: u16) -> [u8; N] {
 }
 
 #[embassy_executor::task]
-pub async fn screen_task(lcd: SPIDriver<'static>, state: &'static mut Mutex<ThreadModeRawMutex, crate::state::State>) {
+pub async fn screen_task(lcd: SPIDriver<'static>) {
     defmt::info!("ILI9341 task");
     let mut ili9341_lcd = ILI9341::new(lcd, LcdOrientation::Rotate90);
     defmt::info!("ILI9341 init");
@@ -383,23 +383,21 @@ pub async fn screen_task(lcd: SPIDriver<'static>, state: &'static mut Mutex<Thre
     ];
 
     Timer::after_millis(1000).await;
+    ili9341_lcd.clear(0xFFFF).await;
+    Timer::after_millis(500).await;
+    ili9341_lcd.clear(0x0000).await;
+    Timer::after_millis(500).await;
+    ili9341_lcd.draw_sprite(0, 0, 30, 30, &sprite).await;
+    Timer::after_millis(500).await;
     loop {
-        ili9341_lcd.clear(0xFFFF).await;
-        Timer::after_millis(500).await;
-        ili9341_lcd.clear(0x0000).await;
-        Timer::after_millis(500).await;
-        ili9341_lcd.draw_sprite(0, 0, 30, 30, &sprite).await;
-        Timer::after_millis(500).await;
-        let state = state.lock().await;
+        let state = crate::STATE.lock().await;
         let mut s: String<32> = String::new();
         s.write_fmt(format_args!("Time: {:02}:{:02}", state.time[0], state.time[1])).unwrap();
-        ili9341_lcd.draw_text((320-160/2)/2, 240/2 - 80, s.as_str(), 0x0000, 0xFFFF, 1).await;
+        ili9341_lcd.draw_text((320-160/2)/2, 240/2 - 80, s.as_str(), 0xFFFF, 0x0000, 1).await;
         s.clear();
-        s.write_fmt(format_args!("Temperature: {:.2}°C", state.temperature)).unwrap();
-        ili9341_lcd.draw_text((320-160/2)/2, 240/2 - 50, s.as_str(), 0x0000, 0xFFFF, 1).await;
-        Timer::after_millis(500).await;
-
+        s.write_fmt(format_args!("Temperature: {:.2} C", state.temperature)).unwrap();
+        ili9341_lcd.draw_text((320-160/2)/2, 240/2 - 50, s.as_str(), 0xFFFF, 0x0000, 1).await;
         ili9341_lcd.draw_line(0, 50, 320, 50, 0xff00).await;
-        Timer::after_millis(5000).await;
+        Timer::after_millis(1).await;
     }
 }

@@ -32,21 +32,35 @@ impl<'a> SPIDriver<'a> {
         Timer::after_millis(200).await;
     }
 
+    pub async fn soft_reset(&self) {
+        self.write_command(&[0x01]).await;
+        Timer::after_millis(200).await;
+    }
+
     pub async fn sleep(&self) {
         self.write_command(&[0x10]).await;
+    }
+
+    pub async fn enable_write_data(&self) {
+        let mut dc = self.dc.lock().await;
+        dc.set_high();
     }
 
     pub async fn write_command(&self, byte: &[u8]) {
         let mut spi = self.spi.lock().await;
         let mut dc = self.dc.lock().await;
         dc.set_low();
-        spi.blocking_write(byte).unwrap()
+        spi.blocking_write(byte).unwrap();
+        dc.set_high();
     }
 
     pub async fn write_data(&self, byte: &[u8]) {
         let mut spi = self.spi.lock().await;
-        let mut dc = self.dc.lock().await;
-        dc.set_high();
+        spi.blocking_write(byte).unwrap()
+    }
+
+    pub async fn write_data_continue(&self, byte: &[u8]) {
+        let mut spi = self.spi.lock().await;
         spi.blocking_write(byte).unwrap()
     }
 
@@ -54,6 +68,7 @@ impl<'a> SPIDriver<'a> {
         let mut spi = self.spi.lock().await;
         let mut dc = self.dc.lock().await;
         dc.set_high();
-        spi.blocking_read(buffer).unwrap()
+        spi.blocking_read(buffer).unwrap();
+        dc.set_low();
     }
 }

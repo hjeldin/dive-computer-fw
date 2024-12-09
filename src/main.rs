@@ -118,12 +118,8 @@ async fn main(spawner: Spawner) {
     );
 
     let mut spi_config = spi::Config::default();
-    spi_config.bit_order = spi::BitOrder::LsbFirst;
-    spi_config.mode = Mode {
-        polarity: spi::Polarity::IdleLow,
-        phase: spi::Phase::CaptureOnFirstTransition,
-    };
-    spi_config.frequency = Hertz(16_000_000);
+    spi_config.bit_order = spi::BitOrder::MsbFirst;
+    spi_config.frequency = Hertz(4_000_000);
 
     let spi = Spi::new_blocking(
         p.SPI2,
@@ -132,12 +128,12 @@ async fn main(spawner: Spawner) {
         p.PB14,  //MISO
         // p.DMA1_CH5,
         // p.DMA1_CH4,
-        spi::Config::default(),
+        spi_config,
     );
 
     let cs = p.PA8;
     let dc = p.PA9;
-    let rst = p.PA3;
+    let rst = p.PB4;
     let mut cs = Output::new(cs, Level::High, Speed::VeryHigh);
     let dc = Output::new(dc, Level::High, Speed::VeryHigh);
     let mut rst = Output::new(rst, Level::High, Speed::VeryHigh);

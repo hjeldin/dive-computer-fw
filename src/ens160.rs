@@ -1,9 +1,4 @@
-use core::{borrow::BorrowMut, cell::RefCell, sync::atomic::Ordering};
-
-use embassy_stm32::{i2c::I2c, mode::Async};
-use embassy_sync::mutex::Mutex;
 use embassy_time::Timer;
-use portable_atomic::AtomicU32;
 
 #[allow(dead_code)]
 mod ens160regs {
@@ -69,8 +64,8 @@ impl<'a> ENS160<'a> {
                 return;
             } else {
                 defmt::info!("[ENS160] Invalid id assigned = {}", id);
+                Timer::after_millis(1000).await;
             }
-            Timer::after_millis(1000).await;
         }
     }
 

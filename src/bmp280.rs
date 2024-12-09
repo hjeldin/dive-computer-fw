@@ -1,7 +1,3 @@
-use core::convert::TryInto;
-
-use embassy_stm32::{i2c::I2c, mode::Async};
-use embassy_sync::{blocking_mutex::raw::ThreadModeRawMutex, mutex::Mutex};
 use embassy_time::Timer;
 
 use crate::i2cdriver::I2CDriver;

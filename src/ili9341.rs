@@ -1,9 +1,11 @@
-use core::convert::TryInto;
+use core::{convert::TryInto, fmt::Write};
 
+use embassy_sync::{blocking_mutex::raw::ThreadModeRawMutex, mutex::Mutex};
 use embassy_time::Timer;
 use ili9341regs::{LcdOrientation, COLUMNS, PAGES};
 
 use crate::spidriver::SPIDriver;
+use heapless::String;
 
 mod ili9341regs {
     macro_rules! mcpregs {
@@ -364,7 +366,7 @@ pub fn color_buffer<const N: usize>(color: u16) -> [u8; N] {
 }
 
 #[embassy_executor::task]
-pub async fn screen_task(lcd: SPIDriver<'static>) {
+pub async fn screen_task(lcd: SPIDriver<'static>, state: &'static mut Mutex<ThreadModeRawMutex, crate::state::State>) {
     defmt::info!("ILI9341 task");
     let mut ili9341_lcd = ILI9341::new(lcd, LcdOrientation::Rotate90);
     defmt::info!("ILI9341 init");
@@ -388,7 +390,13 @@ pub async fn screen_task(lcd: SPIDriver<'static>) {
         Timer::after_millis(500).await;
         ili9341_lcd.draw_sprite(0, 0, 30, 30, &sprite).await;
         Timer::after_millis(500).await;
-        ili9341_lcd.draw_text((320-160/2)/2, 240/2 - 50, "bananarama", 0x0000, 0xFFFF, 1).await;
+        let state = state.lock().await;
+        let mut s: String<32> = String::new();
+        s.write_fmt(format_args!("Time: {:02}:{:02}", state.time[0], state.time[1])).unwrap();
+        ili9341_lcd.draw_text((320-160/2)/2, 240/2 - 80, s.as_str(), 0x0000, 0xFFFF, 1).await;
+        s.clear();
+        s.write_fmt(format_args!("Temperature: {:.2}°C", state.temperature)).unwrap();
+        ili9341_lcd.draw_text((320-160/2)/2, 240/2 - 50, s.as_str(), 0x0000, 0xFFFF, 1).await;
         Timer::after_millis(500).await;
 
         ili9341_lcd.draw_line(0, 50, 320, 50, 0xff00).await;

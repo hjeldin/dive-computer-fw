@@ -23,6 +23,7 @@ portable-atomic = { version = "1.5", features = ["unsafe-assume-single-core"] }
 panic-probe = { version = "0.3.2", features = ["defmt"] }
 embedded-hal-async = "1.0.0"
 flip-link = "0.1.9"
+dive-deco = { path = "../dive-deco" }
 
 [patch.crates-io]
 embassy-time = { git = "https://github.com/embassy-rs/embassy", rev = "9ff8c70009233d4ea05208e3aa649c5b15512cab" }

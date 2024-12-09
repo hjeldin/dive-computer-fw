@@ -25,6 +25,8 @@ mod ens160;
 mod i2cdriver;
 mod ili9341;
 mod spidriver;
+mod decotask;
+mod ms5837;
 
 static LCD_DUTY_CYCLE: AtomicU16 = AtomicU16::new(0);
 static LCD_MAX_DUTY_CYCLE: AtomicU16 = AtomicU16::new(0);
@@ -105,7 +107,9 @@ async fn main(spawner: Spawner) {
 
     let mut button = ExtiInput::new(p.PC13, p.EXTI13, Pull::Up);
 
-    let i2c_config = i2c::Config::default();
+    let mut i2c_config = i2c::Config::default();
+    i2c_config.timeout = embassy_time::Duration::from_millis(1000);
+
     let i2c1: i2c::I2c<'_, embassy_stm32::mode::Async> = i2c::I2c::new(
         p.I2C1,
         p.PB8,
@@ -146,15 +150,20 @@ async fn main(spawner: Spawner) {
 
     let spidriver = spidriver::SPIDriver::new(static_spi, static_dc, static_rst);
 
-    let bmp280_driver = I2CDriver::new(static_i2c, 0x76);
+    // let bmp280_driver = I2CDriver::new(static_i2c, 0x76);
 
     let ens160_driver = I2CDriver::new(static_i2c, 0x53);
+
+    let ms5837_driver = I2CDriver::new(static_i2c, 0x76);
 
     // spawner.spawn(ens160::ens_task(ens160_driver)).unwrap();
 
     // spawner.spawn(bmp280::bmp_task(bmp280_driver)).unwrap();
 
     spawner.spawn(ili9341::screen_task(spidriver)).unwrap();
+    spawner.spawn(ms5837::ms5837_task(ms5837_driver)).unwrap();
+
+    // spawner.spawn(decotask::deco_task()).unwrap();
 
     let static_dma1_ch5: &mut Mutex<ThreadModeRawMutex, DMA1_CH5> =
         SHARED_DMA1_CH5.init(Mutex::new(p.DMA1_CH5));

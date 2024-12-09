@@ -8,8 +8,37 @@
     "configurations": [
         {
             "type": "probe-rs-debug",
+            "request": "attach",
+            "name": "probe_rs Debug",
+            "cwd": "${workspaceFolder}",
+            //!MODIFY (or remove)
+            "speed": 4600,
+            //!MODIFY
+            "chip": "STM32F030R8Tx",
+            //!MODIFY (or remove)
+            "probe": "0483:374b",
+            "coreConfigs": [
+                {
+                    "coreIndex": 0,
+                    //!MODIFY
+                    "programBinary": "target/thumbv6m-none-eabi/release/stm-blink",
+                    //!MODIFY
+                    "svdFile": "./.vscode/STM32F0x8.svd",
+                    "rttEnabled": true
+                }
+            ],
+            "env": {
+              //!MODIFY (or remove)
+              // If you set this variable, check the VSCode console log window for the location of the log file.
+              "RUST_LOG": "info"
+            },
+            // Info, Debug
+            "consoleLogLevel": "Console"
+          },
+        {
+            "type": "probe-rs-debug",
             "request": "launch",
-            "name": "probe_rs Executable launch example",
+            "name": "probe_rs Launch",
             "cwd": "${workspaceFolder}",
             //!MODIFY (or remove)
             "speed": 4600,
@@ -35,7 +64,8 @@
                     //!MODIFY
                     "programBinary": "target/thumbv6m-none-eabi/release/stm-blink",
                     //!MODIFY
-                    "svdFile": "Relative or fully qualified path to the CMSIS-SVD file for your target core"
+                    "svdFile": "./.vscode/STM32F0x8.svd",
+                    "rttEnabled": true
                 }
             ],
             "env": {

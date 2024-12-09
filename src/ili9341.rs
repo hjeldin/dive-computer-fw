@@ -1,3 +1,5 @@
+use core::convert::TryInto;
+
 use embassy_time::Timer;
 use ili9341regs::{LcdOrientation, COLUMNS, PAGES};
 
@@ -63,6 +65,10 @@ mod ili9341regs {
 
     pub const COLUMNS: u16 = 240;
     pub const PAGES: u16 = 320;
+
+    pub const CHAR_START: usize = 0x20;
+
+    pub const FONT: &[u8] = include_bytes!("../assets/font.bin");
 }
 
 pub struct ILI9341<'a> {
@@ -81,7 +87,7 @@ impl<'a> ILI9341<'a> {
     fn memory_access_control_value(&self) -> u8 {
         let orientation = match self.orientation {
             LcdOrientation::Rotate0 => 0b00000000,
-            LcdOrientation::Rotate90 => 0b01100000,
+            LcdOrientation::Rotate90 => 0b00100000,
             LcdOrientation::Rotate180 => 0b11000000,
             LcdOrientation::Rotate270 => 0b10100000,
         };
@@ -152,6 +158,80 @@ impl<'a> ILI9341<'a> {
         }
     }
 
+    pub async fn draw_sprite(
+        &mut self,
+        x: u16,
+        y: u16,
+        w: u16,
+        h: u16,
+        data: &[u8],
+    ) {
+        self.set_window(x, y, x + w, y + h).await;
+        self.driver.write_data(&data).await;
+    }
+
+    pub async fn draw_text(
+        &mut self,
+        x: u16,
+        y: u16,
+        text: &str,
+        fg_color: u16,
+        bg_color: u16,
+        scale: u16,
+    ) {
+        let mut cx = x;
+
+        for c in text.bytes() {
+            let offset = 8 * (c as usize - ili9341regs::CHAR_START);
+            let data: [u8; 8] = ili9341regs::FONT[offset..offset + 8].try_into().unwrap_or_default();
+            self.draw_character(cx, y, &data, fg_color, bg_color, scale).await;
+            cx += scale * 8
+        }
+    }
+
+    async fn draw_character(
+        &mut self,
+        x: u16,
+        y: u16,
+        data: &[u8; 8],
+        fg_color: u16,
+        bg_color: u16,
+        scale: u16,
+    ) {
+        // TODO make readable
+        self.set_window(x, y, x + scale * 8, y + scale * 8).await;
+
+        let (fgh, fgl) = u16_to_bytes(fg_color);
+        let (bgh, bgl) = u16_to_bytes(bg_color);
+
+        let mut buffer = [0; 16];
+        let chunk = 8 / scale;
+
+        self.driver.enable_write_data().await;
+
+        for row in 0..8 {
+            for _ in 0..scale {
+                for bit_offset in (0..scale).rev() {
+                    let bit_start = bit_offset * chunk;
+                    let bit_end = (bit_offset + 1) * chunk;
+                    for i in bit_start..bit_end {
+                        let (h, l) = if data[row] >> i & 1 == 0 {
+                            (bgh, bgl)
+                        } else {
+                            (fgh, fgl)
+                        };
+                        let offset = 16 - ((i - bit_start + 1) * 2 * scale) as usize;
+                        for b in 0..scale as usize {
+                            buffer[offset + 2 * b + 1] = l;
+                            buffer[offset + 2 * b] = h;
+                        }
+                    }
+                    self.driver.write_data_continue(&buffer).await;
+                }
+            }
+        }
+    }
+
 
     pub async fn init(&self) {
         self.driver.soft_reset().await;
@@ -192,7 +272,7 @@ impl<'a> ILI9341<'a> {
         self.driver.write_data(&[0x86]).await;
 
         self.driver.write_command(&[0x36]).await;
-        self.driver.write_data(&[0x48]).await;
+        self.driver.write_data(&[self.memory_access_control_value()]).await;
 
         self.driver.write_command(&[0x37]).await;
         self.driver.write_data(&[0x00]).await;
@@ -225,6 +305,9 @@ impl<'a> ILI9341<'a> {
         self.driver.write_command(&[0x29]).await;
 
         Timer::after_millis(120).await;
+
+        // self.driver.write_command(&[0x36]).await;
+        // self.driver.write_data(&[0x48]).await;
 
         // self.driver.write_command(&[0xd9]).await;
         // self.driver.write_data(&[0x10]).await;
@@ -369,17 +452,55 @@ impl<'a> ILI9341<'a> {
     }
 }
 
+
+pub fn rgb_to_u16(r: u8, g: u8, b: u8) -> u16 {
+    let rb = r >> 3;
+    let gb = g >> 2;
+    let bb = b >> 3;
+    (rb as u16) << 11 | (gb as u16) << 5 | bb as u16
+}
+
+/// Combine RGB channels into 565 RGB format - as a (u8, u8) tuple
+pub fn rgb_to_u8(r: u8, g: u8, b: u8) -> (u8, u8) {
+    u16_to_bytes(rgb_to_u16(r, g, b))
+}
+
+pub(crate) fn u16_to_bytes(val: u16) -> (u8, u8) {
+    ((val >> 8) as u8, (val & 0xff) as u8)
+}
+
+/// Create a single colored buffer of N/2 pixel length
+pub fn color_buffer<const N: usize>(color: u16) -> [u8; N] {
+    let (h, l) = u16_to_bytes(color);
+    core::array::from_fn(|i| if i % 2 == 0 { h } else { l })
+}
+
 #[embassy_executor::task]
 pub async fn screen_task(lcd: SPIDriver<'static>) {
     defmt::info!("ILI9341 task");
-    let mut ili9341_lcd = ILI9341::new(lcd, LcdOrientation::Rotate0);
+    let mut ili9341_lcd = ILI9341::new(lcd, LcdOrientation::Rotate90);
     defmt::info!("ILI9341 init");
     ili9341_lcd.init().await;
     defmt::info!("ILI9341 init done");
     ili9341_lcd.set_window(0, 0, 30, 30).await;
+
+    let (red_h, red_l) = rgb_to_u8(255, 0, 0);
+    let sprite = [
+        red_h, red_l, red_h, red_l, 0, 0, 0, 0,
+        red_h, red_l, red_h, red_l, 0, 0, 0, 0,
+        0, 0, 0, 0, red_h, red_l, red_h, red_l,
+        0, 0, 0, 0, red_h, red_l, red_h, red_l,
+    ];
+
     Timer::after_millis(1000).await;
-    ili9341_lcd.clear(0x0000).await;
     loop {
+        ili9341_lcd.clear(0xFFFF).await;
         Timer::after_millis(1000).await;
+        ili9341_lcd.clear(0x0000).await;
+        Timer::after_millis(1000).await;
+        ili9341_lcd.draw_sprite(0, 0, 30, 30, &sprite).await;
+        Timer::after_millis(1000).await;
+        ili9341_lcd.draw_text(100, 100, "bananarama", 0x0000, 0xFFFF, 1).await;
+        Timer::after_millis(10000).await;
     }
 }

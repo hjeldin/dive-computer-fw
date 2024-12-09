@@ -13,25 +13,40 @@ impl<'a> I2CDriver<'a> {
         Self { i2c, device_address }
     }
 
-    // Example method to send a byte to the device
-    pub async fn write_bytes(&self, byte: &[u8]) {
+    pub async fn write_bytes(&self, byte: &[u8]) -> Result<(), I2cError> {
         let mut i2c = self.i2c.lock().await;
-        i2c.write(self.device_address,byte).await.unwrap();
+        let res = i2c.write(self.device_address,byte).await;
+        match res {
+            Ok(_) => Ok(()),
+            Err(_) => {
+                defmt::error!("Error writing to I2C device {:x}", self.device_address);
+                return Err(I2cError::WriteError);
+            }
+        }
     }
 
-    // Example method to read a byte from the device
     pub async fn read_byte(&self) -> Result<u8, I2cError> {
         let mut i2c = self.i2c.lock().await;
         let mut buffer = [0u8];
-        i2c.read(self.device_address, &mut buffer).await.unwrap();
-        Ok(buffer[0])
+        let res = i2c.read(self.device_address, &mut buffer).await;
+        match res {
+            Ok(_) => Ok(buffer[0]),
+            Err(_) => {
+                defmt::error!("Error reading from I2C device {:x}", self.device_address);
+                return Err(I2cError::ReadError);
+            }
+        }
     }
 
-    pub async fn write_read(&self, register: &[u8], buffer: &mut [u8]) {
+    pub async fn write_read(&self, register: &[u8], buffer: &'a mut [u8]) -> Result<&'a mut [u8], I2cError> {
         let mut i2c = self.i2c.lock().await;
-        let res = i2c.blocking_write_read(self.device_address, register, buffer);
-        if !res.is_ok() {   
-            defmt::info!("err = {}", res.err());
+        let res = i2c.write_read(self.device_address, register, buffer).await;
+        match res {
+            Ok(_) => Ok(buffer),
+            Err(_) => {
+                defmt::error!("Error reading/writing from I2C device {:x}", self.device_address);
+                return Err(I2cError::ReadError);
+            }
         }
     }
 }

@@ -1,11 +1,18 @@
-use core::{convert::TryInto, fmt::Write};
+use core::{convert::{Infallible, TryInto}, fmt::Write};
 
 use embassy_sync::{blocking_mutex::raw::ThreadModeRawMutex, mutex::Mutex};
-use embassy_time::Timer;
+use embassy_time::{Instant, Timer};
 use ili9341regs::{LcdOrientation, COLUMNS, PAGES};
 
 use crate::spidriver::SPIDriver;
 use heapless::String;
+
+use embedded_graphics_core::{
+    pixelcolor::{raw::RawU16, Rgb565},
+    prelude::*,
+    primitives::Rectangle,
+};
+
 
 mod ili9341regs {
     macro_rules! mcpregs {
@@ -74,9 +81,16 @@ mod ili9341regs {
     pub const FONT: &[u8] = include_bytes!("../assets/font.bin");
 }
 
+struct DrawCommand {
+    x: u16,
+    y: u16,
+    color: [u16; 128],
+}
+
 pub struct ILI9341<'a> {
     driver: SPIDriver<'a>,
     orientation: LcdOrientation,
+    queue: [DrawCommand; 8]
 }
 
 impl<'a> ILI9341<'a> {
@@ -84,6 +98,11 @@ impl<'a> ILI9341<'a> {
         ILI9341 {
             driver: device,
             orientation: lcd_orientation,
+            queue: core::array::from_fn(|_| DrawCommand {
+                x: 0,
+                y: 0,
+                color: [0; 128]
+            })
         }
     }
 
@@ -97,18 +116,18 @@ impl<'a> ILI9341<'a> {
         orientation | 0b00001000
     }
 
-    pub fn size(&self) -> (u16, u16) {
+    pub fn inner_size(&self) -> (u16, u16) {
         match self.orientation {
             LcdOrientation::Rotate0 | LcdOrientation::Rotate180 => (COLUMNS, PAGES),
             LcdOrientation::Rotate90 | LcdOrientation::Rotate270 => (PAGES, COLUMNS),
         }
     }
 
-    pub(crate) fn u16_to_bytes(val: u16) -> (u8, u8) {
+    pub fn u16_to_bytes(val: u16) -> (u8, u8) {
         ((val >> 8) as u8, (val & 0xff) as u8)
     }
 
-    pub(crate) async fn set_window(
+    pub fn set_window(
         &mut self,
         x0: u16,
         y0: u16,
@@ -122,18 +141,18 @@ impl<'a> ILI9341<'a> {
         let (p0h, p0l) = Self::u16_to_bytes(y0);
         let (p1h, p1l) = Self::u16_to_bytes(p1);
 
-        self.driver.write_command(&[ili9341regs::COLUMN_ADDRESS_SET]).await;
-        self.driver.write_data(&[c0h, c0l, c1h, c1l]).await;
+        self.driver.write_command(&[ili9341regs::COLUMN_ADDRESS_SET]);
+        self.driver.write_data(&[c0h, c0l, c1h, c1l]);
 
-        self.driver.write_command(&[ili9341regs::PAGE_ADDRESS_SET]).await;
-        self.driver.write_data(&[p0h, p0l, p1h, p1l]).await;
+        self.driver.write_command(&[ili9341regs::PAGE_ADDRESS_SET]);
+        self.driver.write_data(&[p0h, p0l, p1h, p1l]);
 
-        self.driver.write_command(&[ili9341regs::MEMORY_WRITE]).await;
+        self.driver.write_command(&[ili9341regs::MEMORY_WRITE]);
     }
 
-    pub async fn clear(&mut self, color: u16) {
-        let (w, h) = self.size();
-        self.fill_rect(0, 0, w, h, color).await;
+    pub fn clear(&mut self, color: u16) {
+        let (w, h) = self.inner_size();
+        self.fill_rect(0, 0, w, h, color);
     }
 
     pub fn color_buffer<const N: usize>(color: u16) -> [u8; N] {
@@ -142,7 +161,7 @@ impl<'a> ILI9341<'a> {
     }
 
     /// Draw filled rect or line (when width or height set to 1)
-    pub async fn fill_rect(
+    pub fn fill_rect(
         &mut self,
         x: u16,
         y: u16,
@@ -150,18 +169,35 @@ impl<'a> ILI9341<'a> {
         h: u16,
         color: u16,
     ) {
-        self.set_window(x, y, x + w, y + h).await;
-        self.driver.enable_write_data().await;
+        self.set_window(x, y, x + w, y + h);
+        self.driver.enable_write_data();
 
         // spi send optimization
         // slight buffer overflow seems ok
         let chunk = Self::color_buffer::<32>(color);
         for _ in 0..(w as u32 * h as u32).div_ceil(16) {
-            self.driver.write_data_continue(&chunk).await;
+            self.driver.write_data_continue(&chunk);
         }
     }
 
-    pub async fn draw_sprite(
+    pub fn draw_raw_iter(
+        &mut self,
+        x0: u16,
+        y0: u16,
+        x1: u16,
+        y1: u16,
+        data: &[u8],
+    ) {
+        self.set_window(x0, y0, x1, y1);
+        self.driver.enable_write_data();
+
+        // for _ in 0..(x1 as u32 * y1 as u32).div_ceil(16) {
+            self.driver.write_data_continue(&data);
+        // }
+    }
+
+
+    pub fn draw_sprite(
         &mut self,
         x: u16,
         y: u16,
@@ -169,11 +205,11 @@ impl<'a> ILI9341<'a> {
         h: u16,
         data: &[u8],
     ) {
-        self.set_window(x, y, x + w, y + h).await;
-        self.driver.write_data(&data).await;
+        self.set_window(x, y, x + w, y + h);
+        self.driver.write_data(&data);
     }
 
-    pub async fn draw_text(
+    pub fn draw_text(
         &mut self,
         x: u16,
         y: u16,
@@ -187,12 +223,12 @@ impl<'a> ILI9341<'a> {
         for c in text.bytes() {
             let offset = 8 * (c as usize - ili9341regs::CHAR_START);
             let data: [u8; 8] = ili9341regs::FONT[offset..offset + 8].try_into().unwrap_or_default();
-            self.draw_character(cx, y, &data, fg_color, bg_color, scale).await;
+            self.draw_character(cx, y, &data, fg_color, bg_color, scale);
             cx += scale * 8
         }
     }
 
-    async fn draw_character(
+    fn draw_character(
         &mut self,
         x: u16,
         y: u16,
@@ -202,7 +238,7 @@ impl<'a> ILI9341<'a> {
         scale: u16,
     ) {
         // TODO make readable
-        self.set_window(x, y, x + scale * 8, y + scale * 8).await;
+        self.set_window(x, y, x + scale * 8, y + scale * 8);
 
         let (fgh, fgl) = u16_to_bytes(fg_color);
         let (bgh, bgl) = u16_to_bytes(bg_color);
@@ -210,7 +246,7 @@ impl<'a> ILI9341<'a> {
         let mut buffer = [0; 16];
         let chunk = 8 / scale;
 
-        self.driver.enable_write_data().await;
+        self.driver.enable_write_data();
 
         for row in 0..8 {
             for _ in 0..scale {
@@ -229,13 +265,13 @@ impl<'a> ILI9341<'a> {
                             buffer[offset + 2 * b] = h;
                         }
                     }
-                    self.driver.write_data_continue(&buffer).await;
+                    self.driver.write_data_continue(&buffer);
                 }
             }
         }
     }
 
-    pub async fn draw_line(&mut self, x1: i16, y1: i16, x2: i16, y2: i16, color: u16) {
+    pub fn draw_line(&mut self, x1: i16, y1: i16, x2: i16, y2: i16, color: u16) {
         let dx = (x2 - x1).abs();
         let dy = -(y2 - y1).abs();
         let sx = if x1 < x2 { 1 } else { -1 };
@@ -246,7 +282,7 @@ impl<'a> ILI9341<'a> {
         let mut y = y1;
 
         loop {
-            self.draw_pixel(x as u16, y as u16, color).await;
+            self.draw_pixel(x as u16, y as u16, color);
             if x == x2 && y == y2 {
                 break;
             }
@@ -262,83 +298,209 @@ impl<'a> ILI9341<'a> {
         }
     }
 
-    pub async fn draw_pixel(&mut self, x: u16, y: u16, color: u16) {
-        self.set_window(x, y, x + 1, y + 1).await;
-        self.driver.write_data(&Self::color_buffer::<2>(color)).await;
+    pub fn draw_pixel(&mut self, x: u16, y: u16, color: u16) {
+        self.set_window(x, y, x + 1, y + 1);
+        self.driver.write_data(&Self::color_buffer::<2>(color));
     }
 
     pub async fn init(&self) {
         self.driver.soft_reset().await;
         Timer::after_millis(100).await;
 
-        self.driver.write_command(&[0xef]).await;   // unknown
-        self.driver.write_data(&[0x03, 0x80, 0x02]).await;
+        self.driver.write_command(&[0xef]);   // unknown
+        self.driver.write_data(&[0x03, 0x80, 0x02]);
 
-        self.driver.write_command(&[ili9341regs::POWER_CONTROL_B]).await;   // unknown
-        self.driver.write_data(&[0x00, 0xc1, 0x30]).await;
+        self.driver.write_command(&[ili9341regs::POWER_CONTROL_B]);   // unknown
+        self.driver.write_data(&[0x00, 0xc1, 0x30]);
 
 
-        self.driver.write_command(&[ili9341regs::POWER_ON_SEQ_CONTROL]).await;
-        self.driver.write_data(&[0x64, 0x03, 0x12, 0x81]).await;
+        self.driver.write_command(&[ili9341regs::POWER_ON_SEQ_CONTROL]);
+        self.driver.write_data(&[0x64, 0x03, 0x12, 0x81]);
 
-        self.driver.write_command(&[ili9341regs::DRIVER_TIMING_CONTROL_A]).await;
-        self.driver.write_data(&[0x85, 0x00, 0x78]).await;
+        self.driver.write_command(&[ili9341regs::DRIVER_TIMING_CONTROL_A]);
+        self.driver.write_data(&[0x85, 0x00, 0x78]);
 
-        self.driver.write_command(&[ili9341regs::POWER_CONTROL_A]).await;
-        self.driver.write_data(&[0x39, 0x2c, 0x00, 0x34, 0x02]).await;
+        self.driver.write_command(&[ili9341regs::POWER_CONTROL_A]);
+        self.driver.write_data(&[0x39, 0x2c, 0x00, 0x34, 0x02]);
 
-        self.driver.write_command(&[ili9341regs::PUMP_RATIO_CONTROL]).await;
-        self.driver.write_data(&[0x20]).await;
+        self.driver.write_command(&[ili9341regs::PUMP_RATIO_CONTROL]);
+        self.driver.write_data(&[0x20]);
 
-        self.driver.write_command(&[ili9341regs::DRIVER_TIMING_CONTROL_B]).await;
-        self.driver.write_data(&[0x00, 0x00]).await;
+        self.driver.write_command(&[ili9341regs::DRIVER_TIMING_CONTROL_B]);
+        self.driver.write_data(&[0x00, 0x00]);
 
-        self.driver.write_command(&[ili9341regs::POWER_CONTROL_1]).await;
-        self.driver.write_data(&[0x23]).await;
+        self.driver.write_command(&[ili9341regs::POWER_CONTROL_1]);
+        self.driver.write_data(&[0x23]);
 
-        self.driver.write_command(&[ili9341regs::POWER_CONTROL_2]).await;
-        self.driver.write_data(&[0x10]).await;
+        self.driver.write_command(&[ili9341regs::POWER_CONTROL_2]);
+        self.driver.write_data(&[0x10]);
 
-        self.driver.write_command(&[ili9341regs::VCOM_CONTROL_1]).await;
-        self.driver.write_data(&[0x3e, 0x28]).await;
+        self.driver.write_command(&[ili9341regs::VCOM_CONTROL_1]);
+        self.driver.write_data(&[0x3e, 0x28]);
 
-        self.driver.write_command(&[ili9341regs::VCOM_CONTROL_2]).await;
-        self.driver.write_data(&[0x86]).await;
+        self.driver.write_command(&[ili9341regs::VCOM_CONTROL_2]);
+        self.driver.write_data(&[0x86]);
 
-        self.driver.write_command(&[ili9341regs::MEMORY_ACCESS_CONTROL]).await;
-        self.driver.write_data(&[self.memory_access_control_value()]).await;
+        self.driver.write_command(&[ili9341regs::MEMORY_ACCESS_CONTROL]);
+        self.driver.write_data(&[self.memory_access_control_value()]);
 
-        self.driver.write_command(&[ili9341regs::VERTICAL_SCROLL_START_ADDR]).await;   // unknown
-        self.driver.write_data(&[0x00]).await;
+        self.driver.write_command(&[ili9341regs::VERTICAL_SCROLL_START_ADDR]);   // unknown
+        self.driver.write_data(&[0x00]);
 
-        self.driver.write_command(&[ili9341regs::PIXEL_FORMAT_SET]).await;
-        self.driver.write_data(&[0x55]).await;
+        self.driver.write_command(&[ili9341regs::PIXEL_FORMAT_SET]);
+        self.driver.write_data(&[0x55]);
 
-        self.driver.write_command(&[ili9341regs::FRAME_CONTROL_NORMAL_MODE]).await;
-        self.driver.write_data(&[0x00, 0x18]).await;
+        self.driver.write_command(&[ili9341regs::FRAME_CONTROL_NORMAL_MODE]);
+        self.driver.write_data(&[0x00, 0x18]);
 
-        self.driver.write_command(&[ili9341regs::DISPLAY_FUNCTION_CONTROL]).await;
-        self.driver.write_data(&[0x08, 0x82, 0x27]).await;
+        self.driver.write_command(&[ili9341regs::DISPLAY_FUNCTION_CONTROL]);
+        self.driver.write_data(&[0x08, 0x82, 0x27]);
 
-        self.driver.write_command(&[ili9341regs::ENABLE_3G]).await;
-        self.driver.write_data(&[0x00]).await;
+        self.driver.write_command(&[ili9341regs::ENABLE_3G]);
+        self.driver.write_data(&[0x00]);
 
-        self.driver.write_command(&[ili9341regs::GAMMA_SET]).await;
-        self.driver.write_data(&[0x01]).await;
+        self.driver.write_command(&[ili9341regs::GAMMA_SET]);
+        self.driver.write_data(&[0x01]);
 
-        self.driver.write_command(&[ili9341regs::POSITIVE_GAMMA_CORRECTION]).await;
-        self.driver.write_data(&[0x0f, 0x31, 0x2b, 0x0c, 0x0e, 0x08, 0x4e, 0xf1, 0x37, 0x07, 0x10, 0x03, 0x0e, 0x09, 0x00]).await;
+        self.driver.write_command(&[ili9341regs::POSITIVE_GAMMA_CORRECTION]);
+        self.driver.write_data(&[0x0f, 0x31, 0x2b, 0x0c, 0x0e, 0x08, 0x4e, 0xf1, 0x37, 0x07, 0x10, 0x03, 0x0e, 0x09, 0x00]);
 
-        self.driver.write_command(&[ili9341regs::NEGATIVE_GAMMA_CORRECTION]).await;
-        self.driver.write_data(&[0x00, 0x0e, 0x14, 0x03, 0x11, 0x07, 0x31, 0xc1, 0x48, 0x08, 0x0f, 0x0c, 0x31, 0x36, 0x0f]).await;
+        self.driver.write_command(&[ili9341regs::NEGATIVE_GAMMA_CORRECTION]);
+        self.driver.write_data(&[0x00, 0x0e, 0x14, 0x03, 0x11, 0x07, 0x31, 0xc1, 0x48, 0x08, 0x0f, 0x0c, 0x31, 0x36, 0x0f]);
 
-        self.driver.write_command(&[ili9341regs::SLEEP_OUT]).await;
-
-        Timer::after_millis(120).await;
-
-        self.driver.write_command(&[ili9341regs::DISPLAY_ON]).await;
+        self.driver.write_command(&[ili9341regs::SLEEP_OUT]);
 
         Timer::after_millis(120).await;
+
+        self.driver.write_command(&[ili9341regs::DISPLAY_ON]);
+
+        Timer::after_millis(120).await;
+    }
+}
+
+impl<'a> OriginDimensions for ILI9341<'a> {
+    fn size(&self) -> Size {
+        let size = self.inner_size();
+        Size::new(size.0 as u32, size.1 as u32)
+    }
+}
+
+impl<'a> DrawTarget for ILI9341<'a>
+{
+    type Color = Rgb565;
+
+    fn draw_iter<I>(&mut self, pixels: I) -> Result<(), Self::Error>
+    where
+        I: IntoIterator<Item = Pixel<Self::Color>>,
+    {
+        for Pixel(point, color) in pixels {
+            if self.bounding_box().contains(point) {
+                let x = point.x as u16;
+                let y = point.y as u16;
+                let color = RawU16::from(color).into_inner();
+                self.draw_pixel(x, y, color);
+                // push_queue(&mut self, x, y, color);
+            }
+        }
+        Ok(())
+    }
+
+    fn fill_contiguous<I>(&mut self, area: &Rectangle, colors: I) -> Result<(), Self::Error>
+    where
+        I: IntoIterator<Item = Self::Color>,
+    {
+        let drawable_area = area.intersection(&self.bounding_box());
+
+        if let Some(drawable_bottom_right) = drawable_area.bottom_right() {
+            let x0 = drawable_area.top_left.x as u16;
+            let y0 = drawable_area.top_left.y as u16;
+            let x1 = drawable_bottom_right.x as u16;
+            let y1 = drawable_bottom_right.y as u16;
+            const BUFFER_SIZE: usize = 512;
+            let mut buffer: [u8; BUFFER_SIZE] = [0; BUFFER_SIZE];
+            let mut index = 0;
+            if area == &drawable_area {
+                defmt::info!("All pixels are on screen");
+                for (point, color) in area.points().zip(colors) {
+                    let raw = RawU16::from(color).into_inner();
+                    let bytes = raw.to_be_bytes();
+                    if index + 2 <= BUFFER_SIZE {
+                        buffer[index] = bytes[0];
+                        buffer[index + 1] = bytes[1];
+                        index += 2;
+                    } else {
+                        // Handle buffer overflow (e.g., send the current buffer and reset index)
+                        // self.send_data(&buffer[..index])?;
+                        index = 0;
+                        let _ = self.draw_raw_iter(
+                            x0,
+                            y0,
+                            x1,
+                            y1,
+                            &buffer
+                        );
+                    }
+                }
+
+                // All pixels are on screen
+                
+            } else {
+                for (point, color) in area.points().zip(colors).filter(|(point, _)| drawable_area.contains(*point)) {
+                    let raw = RawU16::from(color).into_inner();
+                    let bytes = raw.to_be_bytes();
+                    if index + 2 <= BUFFER_SIZE {
+                        buffer[index] = bytes[0];
+                        buffer[index + 1] = bytes[1];
+                        index += 2;
+                    } else {
+                        // Handle buffer overflow (e.g., send the current buffer and reset index)
+                        // self.send_data(&buffer[..index])?;
+                        index = 0;
+                        let _ = self.draw_raw_iter(
+                            x0,
+                            y0,
+                            x1,
+                            y1,
+                            &buffer
+                        );
+                    }
+                }
+                // Some pixels are on screen
+                // self.draw_raw_iter(
+                //     x0,
+                //     y0,
+                //     x1,
+                //     y1,
+                //     area.points()
+                //         .zip(colors)
+                //         .filter(|(point, _)| drawable_area.contains(*point))
+                //         .map(|(_, color)| RawU16::from(color).into_inner()),
+                // )
+            }
+            // let _ = self.draw_raw_iter(
+            //     x0,
+            //     y0,
+            //     x1,
+            //     y1,
+            //     &buffer
+            // );
+
+            Ok(())
+        } else {
+            // No pixels are on screen
+            Ok(())
+        }
+    }
+
+    fn clear(&mut self, color: Self::Color) -> Result<(), Infallible> {
+        let _ = self.clear(RawU16::from(color).into_inner());
+        return Ok(())
+    }
+    
+    type Error = core::convert::Infallible;
+    
+    fn fill_solid(&mut self, area: &Rectangle, color: Self::Color) -> Result<(), Self::Error> {
+        self.fill_contiguous(area, core::iter::repeat(color))
     }
 }
 
@@ -372,32 +534,28 @@ pub async fn screen_task(lcd: SPIDriver<'static>) {
     defmt::info!("ILI9341 init");
     ili9341_lcd.init().await;
     defmt::info!("ILI9341 init done");
-    ili9341_lcd.set_window(0, 0, 30, 30).await;
 
-    let (red_h, red_l) = rgb_to_u8(255, 0, 0);
-    let sprite = [
-        red_h, red_l, red_h, red_l, 0, 0, 0, 0,
-        red_h, red_l, red_h, red_l, 0, 0, 0, 0,
-        0, 0, 0, 0, red_h, red_l, red_h, red_l,
-        0, 0, 0, 0, red_h, red_l, red_h, red_l,
-    ];
+    let status_bar = stm_graphics::StatusBar::new(22, 32);
+    let battery_indicator = stm_graphics::battery::BatteryIndicator::new(0xAA);
 
-    Timer::after_millis(1000).await;
-    ili9341_lcd.clear(0xFFFF).await;
+    // Timer::after_millis(1000).await;
+    ili9341_lcd.clear(0xFFFF);
     Timer::after_millis(500).await;
-    ili9341_lcd.clear(0x0000).await;
+    ili9341_lcd.clear(0x0000);
     Timer::after_millis(500).await;
-    ili9341_lcd.draw_sprite(0, 0, 30, 30, &sprite).await;
-    Timer::after_millis(500).await;
+    let mut lastrun = 0;
     loop {
         let state = crate::STATE.lock().await;
-        let mut s: String<32> = String::new();
-        s.write_fmt(format_args!("Time: {:02}:{:02}", state.time[0], state.time[1])).unwrap();
-        ili9341_lcd.draw_text((320-160/2)/2, 240/2 - 80, s.as_str(), 0xFFFF, 0x0000, 1).await;
-        s.clear();
-        s.write_fmt(format_args!("Temperature: {:.2} C", state.temperature)).unwrap();
-        ili9341_lcd.draw_text((320-160/2)/2, 240/2 - 50, s.as_str(), 0xFFFF, 0x0000, 1).await;
-        ili9341_lcd.draw_line(0, 50, 320, 50, 0xff00).await;
-        Timer::after_millis(1).await;
+        let mut r = status_bar.draw(&mut ili9341_lcd);
+        // r = battery_indicator.draw(&mut ili9341_lcd);
+        defmt::info!("{:?}", Instant::now().as_millis() - lastrun);
+        // s.write_fmt(format_args!("Time: {:02}:{:02}", state.time[0], state.time[1])).unwrap();
+        // ili9341_lcd.draw_text((320-160/2)/2, 240/2 - 80, s.as_str(), 0xFFFF, 0x0000, 1).await;
+        // s.clear();
+        // s.write_fmt(format_args!("Temperature: {:.2} C", state.temperature)).unwrap();
+        // ili9341_lcd.draw_text((320-160/2)/2, 240/2 - 50, s.as_str(), 0xFFFF, 0x0000, 1).await;
+        // ili9341_lcd.draw_line(0, 50, 320, 50, 0xff00).await;
+        lastrun = Instant::now().as_millis();
+        Timer::after_millis(33).await;
     }
 }

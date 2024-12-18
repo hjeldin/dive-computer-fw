@@ -56,7 +56,7 @@ impl<'a> MS5837<'a> {
     }
 
     pub async fn init(&mut self) {
-        self.driver.write_bytes(&[ms5837regs::RESET]).await;
+        let _ = self.driver.write_bytes(&[ms5837regs::RESET]).await;
         Timer::after_millis(10).await;
         self.read_prom().await;
     }
@@ -65,9 +65,10 @@ impl<'a> MS5837<'a> {
         // Read PROM coefficients
         for i in 0..8 {
             let mut data = [0; 2];
-            self.driver.write_read(&[ms5837regs::PROM_READ_BASE + (i as u8 * 2)], &mut data);
+            let _ = self.driver.write_read(&[ms5837regs::PROM_READ_BASE + (i as u8 * 2)], &mut data).await;
             self.prom[i] = u16::from_be_bytes(data);
         }
+        defmt::info!("PROM: {:?}", self.prom);
     }
 
     fn crc4(n_prom: &mut [u16; 8]) -> u8 {
@@ -103,14 +104,14 @@ impl<'a> MS5837<'a> {
 
     async fn read_pressure(&mut self, resolution: ms5837regs::Resolution) -> u32 {
         let mut data = [0u8; 3];
-        self.driver.write_read(&[ms5837regs::READ_D1_BASE + resolution as u8], &mut data).await;
+        let _ = self.driver.write_read(&[ms5837regs::READ_D1_BASE + resolution as u8], &mut data).await;
         let d2 = u32::from_be_bytes([0, data[0], data[1], data[2]]);
         d2
     }
 
     async fn read_temperature(&mut self, resolution: ms5837regs::Resolution) -> u32 {
         let mut data = [0u8; 3];
-        self.driver.write_read(&[ms5837regs::READ_D2_BASE + resolution as u8], &mut data).await;
+        let _ = self.driver.write_read(&[ms5837regs::READ_D2_BASE + resolution as u8], &mut data).await;
         let d2 = u32::from_be_bytes([0, data[0], data[1], data[2]]);
         d2
     }

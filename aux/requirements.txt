@@ -1,0 +1,5 @@
+matplotlib==3.9.0
+numpy==2.2.0
+pandas==2.2.3
+bokeh==3.6.2
+plotly==5.24.1

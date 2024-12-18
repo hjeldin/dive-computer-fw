@@ -7,6 +7,13 @@
     "version": "0.2.0",
     "configurations": [
         {
+            "name": "Python Debugger: Current File",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal"
+        },
+        {
             "type": "probe-rs-debug",
             "request": "attach",
             "name": "probe_rs Debug",
@@ -21,20 +28,20 @@
                 {
                     "coreIndex": 0,
                     //!MODIFY
-                    "programBinary": "target/thumbv6m-none-eabi/release/stm-blink",
+                    "programBinary": "target/thumbv7em-none-eabi/release/stm-blink",
                     //!MODIFY
-                    "svdFile": "./.vscode/STM32F0x8.svd",
+                    "svdFile": "./.vscode/STM32L476.svd",
                     "rttEnabled": true
                 }
             ],
             "env": {
-              //!MODIFY (or remove)
-              // If you set this variable, check the VSCode console log window for the location of the log file.
-              "RUST_LOG": "info"
+                //!MODIFY (or remove)
+                // If you set this variable, check the VSCode console log window for the location of the log file.
+                "RUST_LOG": "info"
             },
             // Info, Debug
             "consoleLogLevel": "Console"
-          },
+        },
         {
             "type": "probe-rs-debug",
             "request": "launch",

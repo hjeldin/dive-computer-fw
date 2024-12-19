@@ -1,5 +1,5 @@
-use embassy_time::Timer;
 use dive_deco_x86::*;
+use embassy_time::Timer;
 
 #[embassy_executor::task]
 pub async fn deco_task() {
@@ -16,7 +16,7 @@ pub async fn deco_task() {
         if amb_pressure < 5.0 {
             amb_pressure += 0.1;
         }
-        let result = run_deco_loop(&mut tissues, amb_pressure, temperature,  1.0/60.0);
+        let result = run_deco_loop(&mut tissues, amb_pressure, temperature, 1.0 / 60.0);
         defmt::info!("{:?}", result);
         defmt::info!("pressure {:?}", amb_pressure);
         Timer::after_millis(1000).await;

@@ -4,39 +4,38 @@
 use core::sync::atomic::{AtomicU16, Ordering};
 use defmt::info;
 use embassy_executor::Spawner;
-use embassy_stm32::NVIC_PRIO_BITS;
+use embassy_stm32::exti::ExtiInput;
 use embassy_stm32::gpio::{Level, Output, Pull, Speed};
 use embassy_stm32::i2c::{self, I2c};
-use embassy_stm32::mode::{Async, Blocking};
-use embassy_stm32::peripherals::{DMA1_CH5, PA10, TIM1};
+use embassy_stm32::mode::Async;
+use embassy_stm32::peripherals::{DMA1_CH2, DMA1_CH3, PA10, TIM1};
 use embassy_stm32::spi::{self, Spi};
 use embassy_stm32::time::Hertz;
 use embassy_stm32::timer::simple_pwm::PwmPin;
-use embassy_stm32::{bind_interrupts, peripherals};
 use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex;
 use embassy_sync::mutex::Mutex;
 use embassy_time::Timer;
-use i2cdriver::I2CDriver;
 use static_cell::StaticCell;
 use {defmt_rtt as _, panic_probe as _};
 
 mod bmp280;
+mod decotask;
 mod ens160;
 mod i2cdriver;
 mod ili9341;
-mod spidriver;
-mod decotask;
 mod ms5837;
+mod spidriver;
 mod state;
 
 static LCD_DUTY_CYCLE: AtomicU16 = AtomicU16::new(0);
 static LCD_MAX_DUTY_CYCLE: AtomicU16 = AtomicU16::new(0);
+static LCD_REDRAW: Mutex<ThreadModeRawMutex, bool> = Mutex::new(false);
 
 #[embassy_executor::task]
 async fn pwm_task(
     pwm_pin: PA10,
     timer: TIM1,
-    dma_channel: &'static mut Mutex<ThreadModeRawMutex, DMA1_CH5>,
+    dma_channel: &'static mut Mutex<ThreadModeRawMutex, DMA1_CH3>,
 ) {
     let _dma = dma_channel.lock().await;
     let lcd_brightness = PwmPin::new_ch3(pwm_pin, embassy_stm32::gpio::OutputType::PushPull);
@@ -59,7 +58,7 @@ async fn pwm_task(
     loop {
         let del = LCD_DUTY_CYCLE.load(Ordering::Relaxed);
         pwm.channel(pwm_channel).set_duty_cycle(del as u16);
-        Timer::after_millis(1).await;
+        Timer::after_millis(100).await;
     }
 }
 
@@ -67,6 +66,9 @@ async fn pwm_task(
 //     // I2C1 => i2c::EventInterruptHandler<peripherals::I2C1>, i2c::ErrorInterruptHandler<peripherals::I2C1>;
 // });
 
+// bind_interrupts!(struct Irqs {
+//     EXTI
+// });
 
 pub static STATE: Mutex<ThreadModeRawMutex, state::State> = Mutex::new(state::State {
     time: [0; 4],
@@ -102,7 +104,7 @@ async fn main(spawner: Spawner) {
         StaticCell::new();
     static SHARED_DC: StaticCell<Mutex<ThreadModeRawMutex, Output<'static>>> = StaticCell::new();
     static SHARED_RST: StaticCell<Mutex<ThreadModeRawMutex, Output<'static>>> = StaticCell::new();
-    static SHARED_DMA1_CH5: StaticCell<Mutex<ThreadModeRawMutex, DMA1_CH5>> = StaticCell::new();
+    static SHARED_DMA1_CH5: StaticCell<Mutex<ThreadModeRawMutex, DMA1_CH3>> = StaticCell::new();
 
     // let mut button = ExtiInput::new(p.PC13, p.EXTI13, Pull::Up);
 
@@ -125,13 +127,10 @@ async fn main(spawner: Spawner) {
     spi_config.frequency = Hertz(32_000_000);
 
     let spi = Spi::new(
-        p.SPI2,
-        p.PB13, //SCK
+        p.SPI2, p.PB13, //SCK
         p.PB15, //MOSI
-        p.PB14,  //MISO
-        p.DMA1_CH5,
-        p.DMA1_CH4,
-        spi_config,
+        p.PB14, //MISO
+        p.DMA1_CH5, p.DMA1_CH4, spi_config,
     );
 
     let cs = p.PA8;
@@ -143,11 +142,11 @@ async fn main(spawner: Spawner) {
     rst.set_low();
 
     // let static_i2c = SHARED_I2C.init(Mutex::new(i2c1));
-    let static_spi = SHARED_SPI.init(Mutex::new(spi));
+    // let static_spi = SHARED_SPI.init(Mutex::new(spi));
     let static_dc = SHARED_DC.init(Mutex::new(dc));
     let static_rst = SHARED_RST.init(Mutex::new(rst));
 
-    let spidriver = spidriver::SPIDriver::new(static_spi, static_dc, static_rst);
+    // let spidriver = spidriver::SPIDriver::new(static_spi, static_dc, static_rst);
 
     // let bmp280_driver = I2CDriver::new(static_i2c, 0x76);
 
@@ -159,15 +158,19 @@ async fn main(spawner: Spawner) {
 
     // spawner.spawn(bmp280::bmp_task(bmp280_driver)).unwrap();
 
-    spawner.spawn(ili9341::screen_task(spidriver)).unwrap();
+    spawner
+        .spawn(ili9341::screen_task(spi, static_dc, static_rst))
+        .unwrap();
     // spawner.spawn(ms5837::ms5837_task(ms5837_driver)).unwrap();
-    spawner.spawn(decotask::deco_task()).unwrap();
+    // spawner.spawn(decotask::deco_task()).unwrap();
 
-    // let static_dma1_ch5: &mut Mutex<ThreadModeRawMutex, DMA1_CH2> =
-    //     SHARED_DMA1_CH5.init(Mutex::new(p.DMA1_CH2));
-    // spawner
-    //     .spawn(pwm_task(p.PA10, p.TIM1, static_dma1_ch5))
-    //     .unwrap();
+    let mut button = ExtiInput::new(p.PC13, p.EXTI13, Pull::Up);
+
+    let static_dma1_ch5: &mut Mutex<ThreadModeRawMutex, DMA1_CH3> =
+        SHARED_DMA1_CH5.init(Mutex::new(p.DMA1_CH3));
+    spawner
+        .spawn(pwm_task(p.PA10, p.TIM1, static_dma1_ch5))
+        .unwrap();
 
     // Timer::after_millis(200).await;
     // rst.set_low();
@@ -179,16 +182,22 @@ async fn main(spawner: Spawner) {
     loop {
         // defmt::info!("loop");
         // Check if button got pressed
-        // button.wait_for_rising_edge().await;
-        Timer::after_millis(1).await;
-        // info!("rising_edge");
-        // del_var = del_var - 200;
+        button.wait_for_rising_edge().await;
+        Timer::after_millis(100).await;
+        info!("rising_edge");
+        del_var = del_var - 2000;
         // // // If updated delay value drops below 200 then reset it back to starting value
-        // if del_var < 200 {
-        //     del_var = LCD_MAX_DUTY_CYCLE.load(Ordering::Relaxed);
-        // }
+        if del_var < 2000 {
+            del_var = LCD_MAX_DUTY_CYCLE.load(Ordering::Relaxed);
+        }
         // // Updated delay value to global context
-        // LCD_DUTY_CYCLE.store(del_var, Ordering::Relaxed);
+        LCD_DUTY_CYCLE.store(del_var, Ordering::Relaxed);
+        let mut redraw = LCD_REDRAW.lock().await;
+
+        *redraw = true;
+
+        info!("yo");
+
         // let mut d = static_rst.lock().await;
         // if d.is_set_high() {
         //     d.set_low();

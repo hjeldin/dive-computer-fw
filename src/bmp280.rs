@@ -3,7 +3,7 @@ use embassy_time::Timer;
 use crate::i2cdriver::I2CDriver;
 
 #[allow(dead_code)]
-mod bmp280regs {    
+mod bmp280regs {
     pub const ADDR: u8 = 0x53;
 
     macro_rules! mcpregs {
@@ -47,12 +47,9 @@ mod bmp280regs {
     }
 }
 
-
 fn bme280_compensate_t_int32(adc_t: i32, dig_t1: u16, dig_t2: i16, dig_t3: i16) -> (i32, i32) {
     let var1: i32 = (((adc_t >> 3) - ((dig_t1 as i32) << 1)) * dig_t2 as i32) >> 11;
-    let var2: i32 = (((((adc_t >> 4) - (dig_t1 as i32))
-        * ((adc_t >> 4) - (dig_t1 as i32)))
-        >> 12)
+    let var2: i32 = (((((adc_t >> 4) - (dig_t1 as i32)) * ((adc_t >> 4) - (dig_t1 as i32))) >> 12)
         * dig_t3 as i32)
         >> 14;
 
@@ -113,7 +110,7 @@ fn bme280_compensate_h_double32(adc_h: i32, t_fine: i32) -> f64 {
 pub enum Bmp280CalibData {
     TEMPERATURE,
     PRESSURE,
-    HUMIDITY
+    HUMIDITY,
 }
 
 pub struct BMP280<'a> {
@@ -126,7 +123,13 @@ pub struct BMP280<'a> {
 
 impl<'a> BMP280<'a> {
     pub fn new(device: I2CDriver<'a>) -> Self {
-        BMP280 { driver: device, t_fine: 0, dig_t1: 0, dig_t2: 0, dig_t3: 0 }
+        BMP280 {
+            driver: device,
+            t_fine: 0,
+            dig_t1: 0,
+            dig_t2: 0,
+            dig_t3: 0,
+        }
     }
 
     pub async fn init(&mut self) {
@@ -138,7 +141,6 @@ impl<'a> BMP280<'a> {
 
             id = buffer[0] as u16;
 
-    
             if assigned_id == id {
                 defmt::info!("[BMP280] ID assigned = {}", id);
                 return;
@@ -151,7 +153,10 @@ impl<'a> BMP280<'a> {
 
     pub async fn get_status(&mut self) {
         let mut buffer: [u8; 8] = [0; 8];
-        let result = self.driver.write_read(&[bmp280regs::STATUS], &mut buffer).await;
+        let result = self
+            .driver
+            .write_read(&[bmp280regs::STATUS], &mut buffer)
+            .await;
         defmt::info!("[BMP280] Status = {}", buffer);
     }
 
@@ -160,17 +165,25 @@ impl<'a> BMP280<'a> {
         let mut buffer_lsb: [u8; 1] = [0; 1];
         let mut buffer_xlsb: [u8; 1] = [0; 1];
 
-        let result_msb = self.driver.write_read(&[bmp280regs::PRESSMSB], &mut buffer_msb).await;
-        let result_lsb = self.driver.write_read(&[bmp280regs::PRESSLSB], &mut buffer_lsb).await;
-        let result_xlsb = self.driver.write_read(&[bmp280regs::PRESSXLSB], &mut buffer_xlsb).await;
+        let result_msb = self
+            .driver
+            .write_read(&[bmp280regs::PRESSMSB], &mut buffer_msb)
+            .await;
+        let result_lsb = self
+            .driver
+            .write_read(&[bmp280regs::PRESSLSB], &mut buffer_lsb)
+            .await;
+        let result_xlsb = self
+            .driver
+            .write_read(&[bmp280regs::PRESSXLSB], &mut buffer_xlsb)
+            .await;
 
-        let value: i32 = (buffer_msb[0] as i32) << 16 | (buffer_lsb[0] as i32) << 8 | (buffer_xlsb[0] as i32);
+        let value: i32 =
+            (buffer_msb[0] as i32) << 16 | (buffer_lsb[0] as i32) << 8 | (buffer_xlsb[0] as i32);
 
         let compensated_value = bme280_compensate_p_int32(value, self.t_fine);
 
-
         defmt::info!("[BMP280] Pressure MSB = {} - LSB = {} - XLSB = {} - VALUE = {} - COMPENSATED VALUE = {}", buffer_msb, buffer_lsb, buffer_xlsb, value, compensated_value);
-        
     }
 
     pub async fn get_temp(&mut self) {
@@ -178,30 +191,51 @@ impl<'a> BMP280<'a> {
         let mut buffer_lsb: [u8; 1] = [0; 1];
         let mut buffer_xlsb: [u8; 1] = [0; 1];
 
-        let result_msb = self.driver.write_read(&[bmp280regs::TEMPMSB], &mut buffer_msb).await;
-        let result_lsb = self.driver.write_read(&[bmp280regs::TEMPLSB], &mut buffer_lsb).await;
-        let result_xlsb = self.driver.write_read(&[bmp280regs::TEMPXLSB], &mut buffer_xlsb).await;
+        let result_msb = self
+            .driver
+            .write_read(&[bmp280regs::TEMPMSB], &mut buffer_msb)
+            .await;
+        let result_lsb = self
+            .driver
+            .write_read(&[bmp280regs::TEMPLSB], &mut buffer_lsb)
+            .await;
+        let result_xlsb = self
+            .driver
+            .write_read(&[bmp280regs::TEMPXLSB], &mut buffer_xlsb)
+            .await;
 
-        let value: i32 = (buffer_msb[0] as i32) << 16 | (buffer_lsb[0] as i32) << 8 | (buffer_xlsb[0] as i32);
-        let compensated_value = bme280_compensate_t_int32(value, self.dig_t1, self.dig_t2, self.dig_t3);
+        let value: i32 =
+            (buffer_msb[0] as i32) << 16 | (buffer_lsb[0] as i32) << 8 | (buffer_xlsb[0] as i32);
+        let compensated_value =
+            bme280_compensate_t_int32(value, self.dig_t1, self.dig_t2, self.dig_t3);
         self.t_fine = compensated_value.1;
-        
 
         defmt::info!("[BMP280]T-fine = {} - Temperature MSB = {} - LSB = {} - XLSB = {} - VALUE = {} - COMPENSATED VALUE = {} ", self.t_fine, buffer_msb, buffer_lsb, buffer_xlsb, value, compensated_value);
-        
     }
 
     pub async fn get_hum(&mut self) {
         let mut buffer_msb: [u8; 1] = [0; 1];
         let mut buffer_lsb: [u8; 1] = [0; 1];
 
-        let result_msb = self.driver.write_read(&[bmp280regs::HUMMSB], &mut buffer_msb).await;
-        let result_lsb = self.driver.write_read(&[bmp280regs::HUMLSB], &mut buffer_lsb).await;
+        let result_msb = self
+            .driver
+            .write_read(&[bmp280regs::HUMMSB], &mut buffer_msb)
+            .await;
+        let result_lsb = self
+            .driver
+            .write_read(&[bmp280regs::HUMLSB], &mut buffer_lsb)
+            .await;
 
         let value: i32 = (buffer_msb[0] as i32) << 8 | (buffer_lsb[0] as i32) << 0;
         let compensated_value = bme280_compensate_h_double32(value, self.t_fine);
 
-        defmt::info!("[BMP280] Humidity MSB = {} - LSB = {} -- VALUE = {} - COMPENSATED VALUE = {} ", buffer_msb, buffer_lsb, value, compensated_value);
+        defmt::info!(
+            "[BMP280] Humidity MSB = {} - LSB = {} -- VALUE = {} - COMPENSATED VALUE = {} ",
+            buffer_msb,
+            buffer_lsb,
+            value,
+            compensated_value
+        );
     }
 
     pub async fn set_mode(&mut self, mode: u8) {
@@ -211,20 +245,25 @@ impl<'a> BMP280<'a> {
         buffer_hum[0] = 0b00000001;
         buffer_meas[0] = 0b00100111;
         buffer_config[0] = 0b01000000;
-        let result_hum = self.driver.write_bytes(&[bmp280regs::CTRLHUM, buffer_hum[0]]).await;
-        let result_meas = self.driver.write_bytes(&[bmp280regs::CTRLMEAS, buffer_meas[0]]).await;
-        let result_config = self.driver.write_bytes(&[bmp280regs::CONFIG, buffer_config[0]]).await;
+        let result_hum = self
+            .driver
+            .write_bytes(&[bmp280regs::CTRLHUM, buffer_hum[0]])
+            .await;
+        let result_meas = self
+            .driver
+            .write_bytes(&[bmp280regs::CTRLMEAS, buffer_meas[0]])
+            .await;
+        let result_config = self
+            .driver
+            .write_bytes(&[bmp280regs::CONFIG, buffer_config[0]])
+            .await;
         Timer::after_millis(1000).await;
     }
 
     pub async fn get_calibration_data(&mut self, calib_data: Bmp280CalibData) {
         match calib_data {
-            Bmp280CalibData::HUMIDITY => {
-
-            }
-            Bmp280CalibData::PRESSURE => {
-
-            }
+            Bmp280CalibData::HUMIDITY => {}
+            Bmp280CalibData::PRESSURE => {}
             Bmp280CalibData::TEMPERATURE => {
                 let mut dig_t11_buff: [u8; 2] = [0; 2];
 
@@ -232,11 +271,17 @@ impl<'a> BMP280<'a> {
 
                 let mut dig_t31_buff: [u8; 2] = [0; 2];
 
-                self.driver.write_read(&[bmp280regs::CALIB_T11], &mut dig_t11_buff).await;                
+                self.driver
+                    .write_read(&[bmp280regs::CALIB_T11], &mut dig_t11_buff)
+                    .await;
 
-                self.driver.write_read(&[bmp280regs::CALIB_T21], &mut dig_t21_buff).await;
+                self.driver
+                    .write_read(&[bmp280regs::CALIB_T21], &mut dig_t21_buff)
+                    .await;
 
-                self.driver.write_read(&[bmp280regs::CALIB_T31], &mut dig_t31_buff).await;
+                self.driver
+                    .write_read(&[bmp280regs::CALIB_T31], &mut dig_t31_buff)
+                    .await;
 
                 let tmp_t1 = (dig_t11_buff[0] as u16) << 8 | (dig_t11_buff[1] as u16);
                 self.dig_t1 = (tmp_t1 >> 8) | (tmp_t1 << 8);
@@ -250,12 +295,16 @@ impl<'a> BMP280<'a> {
                 defmt::info!("[BMP280] Buff t1: {} ", dig_t11_buff);
                 defmt::info!("[BMP280] Buff t2: {} ", dig_t21_buff);
                 defmt::info!("[BMP280] Buff t3: {} ", dig_t31_buff);
-                defmt::info!("[BMP280] Got calibration data: {} {} {}", self.dig_t1, self.dig_t2, self.dig_t3);
+                defmt::info!(
+                    "[BMP280] Got calibration data: {} {} {}",
+                    self.dig_t1,
+                    self.dig_t2,
+                    self.dig_t3
+                );
 
                 Timer::after_millis(1000).await;
             }
         }
-
     }
 }
 
@@ -265,9 +314,11 @@ pub async fn bmp_task(sensor: I2CDriver<'static>) {
     // On the Nucleo F091RC there's an on-board LED connected to pin PA5.
     let mut bmp280_sensor = BMP280::new(sensor);
     bmp280_sensor.init().await;
-    bmp280_sensor.get_calibration_data(Bmp280CalibData::TEMPERATURE).await;
+    bmp280_sensor
+        .get_calibration_data(Bmp280CalibData::TEMPERATURE)
+        .await;
     bmp280_sensor.set_mode(0xff).await;
-    loop{
+    loop {
         // bmp280_sensor.get_status().await;
         // bmp280_sensor.get_press().await;
         bmp280_sensor.get_temp().await;

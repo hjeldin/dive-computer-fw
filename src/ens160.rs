@@ -75,9 +75,11 @@ impl<'a> ENS160<'a> {
         defmt::info!("[ENS160] Set opmode = {}", opmode);
     }
 
-    pub async fn get_status(&mut self) -> [u8; 8]{
+    pub async fn get_status(&mut self) -> [u8; 8] {
         let mut buffer: [u8; 8] = [0; 8];
-        self.driver.write_read(&[ens160regs::STATUS], &mut buffer).await;
+        self.driver
+            .write_read(&[ens160regs::STATUS], &mut buffer)
+            .await;
 
         defmt::info!("[ENS160] Status = {}", buffer);
 
@@ -87,7 +89,9 @@ impl<'a> ENS160<'a> {
     pub async fn get_voc(&mut self) -> u16 {
         let mut voc: u16 = 0;
         let mut buffer: [u8; 2] = [0; 2];
-        self.driver.write_read(&[ens160regs::DATA_TVOC], &mut buffer).await;
+        self.driver
+            .write_read(&[ens160regs::DATA_TVOC], &mut buffer)
+            .await;
         voc = buffer[0] as u16 | (buffer[1] as u16) << 8;
         voc
     }
@@ -95,14 +99,18 @@ impl<'a> ENS160<'a> {
     pub async fn get_eco2(&mut self) -> u16 {
         let mut voc: u16 = 0;
         let mut buffer: [u8; 2] = [0; 2];
-        self.driver.write_read(&[ens160regs::DATA_ECO2], &mut buffer).await;
+        self.driver
+            .write_read(&[ens160regs::DATA_ECO2], &mut buffer)
+            .await;
         voc = buffer[0] as u16 | (buffer[1] as u16) << 8;
         voc
     }
 
     pub async fn get_aqi(&mut self) -> u8 {
         let mut buffer: [u8; 1] = [0; 1];
-        self.driver.write_read(&[ens160regs::DATA_AQI], &mut buffer).await;
+        self.driver
+            .write_read(&[ens160regs::DATA_AQI], &mut buffer)
+            .await;
         buffer[0]
     }
 }

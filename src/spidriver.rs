@@ -1,11 +1,4 @@
-use core::convert::TryInto;
-
-use embassy_stm32::{
-    gpio::{AnyPin, Level, Output, Speed},
-    mode::{Async, Blocking},
-    pac::metadata::Peripheral,
-    spi::Spi,
-};
+use embassy_stm32::{gpio::Output, mode::Async, spi::Spi};
 use embassy_sync::{blocking_mutex::raw::ThreadModeRawMutex, mutex::Mutex};
 use embassy_time::Timer;
 
@@ -59,13 +52,13 @@ impl<'a> SPIDriver<'a> {
 
     pub fn write_data(&self, byte: &[u8]) {
         let mut spi = self.spi.try_lock().unwrap();
-        defmt::info!("write_data {}", byte.len());
+        // defmt::info!("write_data {}", byte.len());
         spi.blocking_write(byte).unwrap()
     }
 
     pub fn write_data_continue(&self, byte: &[u8]) {
         let mut spi = self.spi.try_lock().unwrap();
-        defmt::info!("write_data {}", byte.len());
+        // defmt::info!("write_data {}", byte.len());
         spi.blocking_write(byte).unwrap()
     }
 

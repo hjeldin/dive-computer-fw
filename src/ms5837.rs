@@ -5,7 +5,7 @@ use static_cell::StaticCell;
 use crate::i2cdriver::I2CDriver;
 
 #[allow(dead_code)]
-mod ms5837regs {    
+mod ms5837regs {
     pub const ADDR: u8 = 0x53;
 
     macro_rules! mcpregs {
@@ -52,7 +52,10 @@ pub struct MS5837<'a> {
 
 impl<'a> MS5837<'a> {
     pub fn new(device: I2CDriver<'a>) -> Self {
-        MS5837 { driver: device, prom: [0; 8] }
+        MS5837 {
+            driver: device,
+            prom: [0; 8],
+        }
     }
 
     pub async fn init(&mut self) {
@@ -65,7 +68,10 @@ impl<'a> MS5837<'a> {
         // Read PROM coefficients
         for i in 0..8 {
             let mut data = [0; 2];
-            let _ = self.driver.write_read(&[ms5837regs::PROM_READ_BASE + (i as u8 * 2)], &mut data).await;
+            let _ = self
+                .driver
+                .write_read(&[ms5837regs::PROM_READ_BASE + (i as u8 * 2)], &mut data)
+                .await;
             self.prom[i] = u16::from_be_bytes(data);
         }
         defmt::info!("PROM: {:?}", self.prom);
@@ -73,11 +79,11 @@ impl<'a> MS5837<'a> {
 
     fn crc4(n_prom: &mut [u16; 8]) -> u8 {
         let mut n_rem: u16 = 0; // Remainder
-    
+
         // Mask the first element and set the last to 0
         n_prom[0] &= 0x0FFF;
         n_prom[7] = 0;
-    
+
         // Main loop
         for cnt in 0..16 {
             if cnt % 2 == 1 {
@@ -85,7 +91,7 @@ impl<'a> MS5837<'a> {
             } else {
                 n_rem ^= (n_prom[cnt >> 1] >> 8) as u16;
             }
-    
+
             // Perform operations on each bit
             for _ in 0..8 {
                 if n_rem & 0x8000 != 0 {
@@ -95,28 +101,36 @@ impl<'a> MS5837<'a> {
                 }
             }
         }
-    
+
         // Final processing
         n_rem = (n_rem >> 12) & 0x000F;
         (n_rem ^ 0x00) as u8
     }
-    
 
     async fn read_pressure(&mut self, resolution: ms5837regs::Resolution) -> u32 {
         let mut data = [0u8; 3];
-        let _ = self.driver.write_read(&[ms5837regs::READ_D1_BASE + resolution as u8], &mut data).await;
+        let _ = self
+            .driver
+            .write_read(&[ms5837regs::READ_D1_BASE + resolution as u8], &mut data)
+            .await;
         let d2 = u32::from_be_bytes([0, data[0], data[1], data[2]]);
         d2
     }
 
     async fn read_temperature(&mut self, resolution: ms5837regs::Resolution) -> u32 {
         let mut data = [0u8; 3];
-        let _ = self.driver.write_read(&[ms5837regs::READ_D2_BASE + resolution as u8], &mut data).await;
+        let _ = self
+            .driver
+            .write_read(&[ms5837regs::READ_D2_BASE + resolution as u8], &mut data)
+            .await;
         let d2 = u32::from_be_bytes([0, data[0], data[1], data[2]]);
         d2
     }
 
-    pub async fn calculate_temperature_pression(&mut self, resolution: ms5837regs::Resolution) -> (f32, f32) {
+    pub async fn calculate_temperature_pression(
+        &mut self,
+        resolution: ms5837regs::Resolution,
+    ) -> (f32, f32) {
         let d1 = self.read_pressure(resolution).await;
         let d2 = self.read_temperature(resolution).await;
         let c1 = self.prom[1] as i32; // Pressure sensitivity
@@ -150,8 +164,10 @@ impl<'a> MS5837<'a> {
 pub async fn ms5837_task(sensor: I2CDriver<'static>) {
     let mut ms5837_sensor = MS5837::new(sensor);
     ms5837_sensor.init().await;
-    loop{
-        let result = ms5837_sensor.calculate_temperature_pression(ms5837regs::Resolution::Osr256).await;
+    loop {
+        let result = ms5837_sensor
+            .calculate_temperature_pression(ms5837regs::Resolution::Osr256)
+            .await;
         defmt::info!("Pressure: {} Temperature: {}", result.0, result.1);
 
         let mut state = crate::STATE.lock().await;

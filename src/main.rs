@@ -1,22 +1,28 @@
 #![no_main]
 #![no_std]
 
-use core::sync::atomic::{AtomicBool, AtomicU16, AtomicU8, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 use defmt::info;
 use embassy_executor::Spawner;
 use embassy_stm32::exti::ExtiInput;
 use embassy_stm32::gpio::{Level, Output, Pull, Speed};
 use embassy_stm32::i2c::{self, I2c};
 use embassy_stm32::mode::Async;
-use embassy_stm32::peripherals::{DMA1_CH1, DMA1_CH3, DMA1_CH5, DMA2_CH1, PA10, PA2, PB5, TIM1, TIM2, TIM3};
+use embassy_stm32::peripherals::{DMA1_CH1, DMA1_CH3, PA10, PB5, TIM1, TIM3};
 use embassy_stm32::spi::{self, Spi};
 use embassy_stm32::time::Hertz;
 use embassy_stm32::timer::simple_pwm::PwmPin;
+use embassy_stm32::{bind_interrupts, peripherals};
 use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex;
 use embassy_sync::mutex::Mutex;
 use embassy_time::Timer;
 use static_cell::StaticCell;
+use crate::tasks::enter_button::btn_enter_task;
+use crate::tasks::next_button::btn_right_task;
 use {defmt_rtt as _, panic_probe as _};
+use crate::i2cdriver::I2CDriver;
+use crate::tasks::buzzer::buzzer_pwm_task;
+use crate::tasks::lcd_brightness::lcd_brightness_task;
 
 mod bmp280;
 mod decotask;
@@ -26,6 +32,7 @@ mod ili9341;
 mod ms5837;
 mod spidriver;
 mod state;
+mod tasks;
 
 static LCD_DUTY_CYCLE: AtomicU16 = AtomicU16::new(0);
 static LCD_MAX_DUTY_CYCLE: AtomicU16 = AtomicU16::new(0);
@@ -35,79 +42,10 @@ static LCD_ENTER_ITEM: AtomicBool = AtomicBool::new(false);
 static TRIGGER_BUZZ: AtomicU16 = AtomicU16::new(0);
 static TRIGGER_VOLUME: AtomicU16 = AtomicU16::new(0);
 
-#[embassy_executor::task]
-async fn pwm_task(
-    pwm_pin: PA10,
-    timer: TIM1,
-    dma_channel: &'static mut Mutex<ThreadModeRawMutex, DMA1_CH1>,
-) {
-    let _dma = dma_channel.lock().await;
-    let lcd_brightness = PwmPin::new_ch3(pwm_pin, embassy_stm32::gpio::OutputType::PushPull);
-    let mut pwm = embassy_stm32::timer::simple_pwm::SimplePwm::new(
-        timer,
-        None,
-        None,
-        Some(lcd_brightness),
-        None,
-        Hertz(1000),
-        embassy_stm32::timer::low_level::CountingMode::EdgeAlignedUp,
-    );
-    let max_duty = pwm.max_duty_cycle();
-    defmt::info!("{}", max_duty);
-    LCD_DUTY_CYCLE.store(max_duty, Ordering::Relaxed);
-    LCD_MAX_DUTY_CYCLE.store(max_duty, Ordering::Relaxed);
-    let pwm_channel = embassy_stm32::timer::Channel::Ch3;
-    pwm.channel(pwm_channel).set_duty_cycle(max_duty / 5);
-    pwm.channel(pwm_channel).enable();
-    loop {
-        let del = LCD_DUTY_CYCLE.load(Ordering::Relaxed);
-        pwm.channel(pwm_channel).set_duty_cycle(del as u16);
-        Timer::after_millis(100).await;
-    }
-}
-
-
-#[embassy_executor::task]
-async fn buzzer_pwm_task(
-    pwm_pin: PB5,
-    timer: TIM3,
-    dma_channel: &'static mut Mutex<ThreadModeRawMutex, DMA1_CH3>,
-) {
-    let _dma = dma_channel.lock().await;
-    let lcd_brightness = PwmPin::new_ch2(pwm_pin, embassy_stm32::gpio::OutputType::PushPull);
-    let mut pwm = embassy_stm32::timer::simple_pwm::SimplePwm::new(
-        timer,
-        None,
-        Some(lcd_brightness),
-        None,
-        None,
-        Hertz(1000),
-        embassy_stm32::timer::low_level::CountingMode::EdgeAlignedUp,
-    );
-    let max_duty = pwm.max_duty_cycle();   
-    let pwm_channel = embassy_stm32::timer::Channel::Ch2;
-    TRIGGER_VOLUME.store(max_duty/2, Ordering::Relaxed);
-    pwm.set_frequency(Hertz(440));
-    pwm.channel(pwm_channel).set_duty_cycle(TRIGGER_VOLUME.load(Ordering::Relaxed));
-    pwm.channel(pwm_channel).enable();
-    // pwm.channel(pwm_channel)
-    Timer::after_millis(100).await;
-    pwm.channel(pwm_channel).disable();
-    loop {
-        let buzz = TRIGGER_BUZZ.load(Ordering::Relaxed);
-        if buzz == 0 {
-            Timer::after_millis(100).await;
-            continue;
-        }
-        pwm.set_frequency(Hertz(buzz as u32));
-        pwm.channel(pwm_channel).enable();
-        pwm.channel(pwm_channel).set_duty_cycle(TRIGGER_VOLUME.load(Ordering::Relaxed));
-        defmt::info!("Buzzing with {}Hz at {}", buzz, TRIGGER_VOLUME.load(Ordering::Relaxed));
-        Timer::after_millis(100).await;
-        pwm.channel(pwm_channel).disable();
-        TRIGGER_BUZZ.store(0, Ordering::Relaxed);
-    }
-}
+bind_interrupts!(struct Irqs {
+    I2C1_EV => i2c::EventInterruptHandler<peripherals::I2C1>;
+    I2C1_ER => i2c::ErrorInterruptHandler<peripherals::I2C1>;
+});
 
 pub static STATE: Mutex<ThreadModeRawMutex, state::State> = Mutex::new(state::State {
     time: [0; 4],
@@ -149,16 +87,16 @@ async fn main(spawner: Spawner) {
     let mut i2c_config = i2c::Config::default();
     i2c_config.timeout = embassy_time::Duration::from_millis(1000);
 
-    // let i2c1: i2c::I2c<'_, embassy_stm32::mode::Async> = i2c::I2c::new(
-    //     p.I2C3,
-    //     p.PB8,
-    //     p.PB9,
-    //     Irqs,
-    //     p.DMA1_CH2,
-    //     p.DMA1_CH3,
-    //     Hertz(100_000),
-    //     i2c_config,
-    // );
+    let i2c1: i2c::I2c<'_, embassy_stm32::mode::Async> = i2c::I2c::new(
+        p.I2C1,
+        p.PB8,
+        p.PB9,
+        Irqs,
+        p.DMA1_CH6,
+        p.DMA1_CH7,
+        Hertz(100_000),
+        i2c_config,
+    );
 
     let mut spi_config = spi::Config::default();
     spi_config.bit_order = spi::BitOrder::MsbFirst;
@@ -179,21 +117,21 @@ async fn main(spawner: Spawner) {
     let mut rst = Output::new(rst, Level::High, Speed::VeryHigh);
     rst.set_low();
 
-    // let static_i2c = SHARED_I2C.init(Mutex::new(i2c1));
-    // let static_spi = SHARED_SPI.init(Mutex::new(spi));
+    let static_i2c = SHARED_I2C.init(Mutex::new(i2c1));
+
     let static_dc = SHARED_DC.init(Mutex::new(dc));
     let static_rst = SHARED_RST.init(Mutex::new(rst));
 
     // let spidriver = spidriver::SPIDriver::new(static_spi, static_dc, static_rst);
 
-    // let bmp280_driver = I2CDriver::new(static_i2c, 0x76);
+    let bmp280_driver = I2CDriver::new(static_i2c, 0x76);
 
-    // let ens160_driver = I2CDriver::new(static_i2c, 0x53);
+    let ens160_driver = I2CDriver::new(static_i2c, 0x53);
 
-    // let ms5837_driver = I2CDriver::new(static_i2c, 0x76);
+    let ms5837_driver = I2CDriver::new(static_i2c, 0x76);
 
     // spawner.spawn(ens160::ens_task(ens160_driver)).unwrap();
-
+    //
     // spawner.spawn(bmp280::bmp_task(bmp280_driver)).unwrap();
 
     spawner
@@ -217,7 +155,7 @@ async fn main(spawner: Spawner) {
     let static_dma1_ch1: &mut Mutex<ThreadModeRawMutex, DMA1_CH1> =
         SHARED_DMA1_CH1.init(Mutex::new(p.DMA1_CH1));
     spawner
-        .spawn(pwm_task(p.PA10, p.TIM1,  static_dma1_ch1))
+        .spawn(lcd_brightness_task(p.PA10, p.TIM1, static_dma1_ch1))
         .unwrap();
 
     spawner
@@ -248,28 +186,5 @@ async fn main(spawner: Spawner) {
         // } else {
         //     d.set_high();
         // }
-    }
-}
-
-
-#[embassy_executor::task]
-async fn btn_right_task(mut input: ExtiInput<'static>) {
-    loop {
-        input.wait_for_rising_edge().await;
-        LCD_NEXT_ITEM.store(true, Ordering::Relaxed);
-        info!("Right button pressed");
-        TRIGGER_BUZZ.store(100, Ordering::Relaxed);
-        Timer::after_millis(100).await;
-    }
-}
-
-#[embassy_executor::task]
-async fn btn_enter_task(mut input: ExtiInput<'static>) {
-    loop {
-        input.wait_for_rising_edge().await;
-        LCD_ENTER_ITEM.store(true, Ordering::Relaxed);
-        info!("Enter button pressed");
-        TRIGGER_BUZZ.store(1000, Ordering::Relaxed);
-        Timer::after_millis(100).await;
     }
 }

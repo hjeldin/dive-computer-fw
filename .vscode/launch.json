@@ -69,9 +69,9 @@
                 {
                     "coreIndex": 0,
                     //!MODIFY
-                    "programBinary": "target/thumbv6m-none-eabi/release/stm-blink",
+                    "programBinary": "target/thumbv7em-none-eabi/release/stm-blink",
                     //!MODIFY
-                    "svdFile": "./.vscode/STM32F0x8.svd",
+                    "svdFile": "./.vscode/STM32L476.svd",
                     "rttEnabled": true
                 }
             ],

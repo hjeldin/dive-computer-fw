@@ -1,7 +1,7 @@
 #![no_main]
 #![no_std]
 
-use core::sync::atomic::{AtomicU16, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 use defmt::info;
 use embassy_executor::Spawner;
 use embassy_stm32::exti::ExtiInput;
@@ -29,7 +29,9 @@ mod state;
 
 static LCD_DUTY_CYCLE: AtomicU16 = AtomicU16::new(0);
 static LCD_MAX_DUTY_CYCLE: AtomicU16 = AtomicU16::new(0);
-static LCD_REDRAW: Mutex<ThreadModeRawMutex, bool> = Mutex::new(false);
+static LCD_REFRESH: AtomicBool = AtomicBool::new(false);
+static LCD_NEXT_ITEM: AtomicBool = AtomicBool::new(false);
+static LCD_ENTER_ITEM: AtomicBool = AtomicBool::new(false);
 
 #[embassy_executor::task]
 async fn pwm_task(
@@ -61,14 +63,6 @@ async fn pwm_task(
         Timer::after_millis(100).await;
     }
 }
-
-// bind_interrupts!(struct Irqs {
-//     // I2C1 => i2c::EventInterruptHandler<peripherals::I2C1>, i2c::ErrorInterruptHandler<peripherals::I2C1>;
-// });
-
-// bind_interrupts!(struct Irqs {
-//     EXTI
-// });
 
 pub static STATE: Mutex<ThreadModeRawMutex, state::State> = Mutex::new(state::State {
     time: [0; 4],
@@ -105,8 +99,6 @@ async fn main(spawner: Spawner) {
     static SHARED_DC: StaticCell<Mutex<ThreadModeRawMutex, Output<'static>>> = StaticCell::new();
     static SHARED_RST: StaticCell<Mutex<ThreadModeRawMutex, Output<'static>>> = StaticCell::new();
     static SHARED_DMA1_CH5: StaticCell<Mutex<ThreadModeRawMutex, DMA1_CH3>> = StaticCell::new();
-
-    // let mut button = ExtiInput::new(p.PC13, p.EXTI13, Pull::Up);
 
     let mut i2c_config = i2c::Config::default();
     i2c_config.timeout = embassy_time::Duration::from_millis(1000);
@@ -166,6 +158,14 @@ async fn main(spawner: Spawner) {
 
     let mut button = ExtiInput::new(p.PC13, p.EXTI13, Pull::Up);
 
+    let mut button_right = ExtiInput::new(p.PA1, p.EXTI1, Pull::Up);
+
+    spawner.spawn(btn_right_task(button_right)).unwrap();
+
+    let mut button_enter = ExtiInput::new(p.PA4, p.EXTI4, Pull::Up);
+
+    spawner.spawn(btn_enter_task(button_enter)).unwrap();
+
     let static_dma1_ch5: &mut Mutex<ThreadModeRawMutex, DMA1_CH3> =
         SHARED_DMA1_CH5.init(Mutex::new(p.DMA1_CH3));
     spawner
@@ -184,19 +184,16 @@ async fn main(spawner: Spawner) {
         // Check if button got pressed
         button.wait_for_rising_edge().await;
         Timer::after_millis(100).await;
-        info!("rising_edge");
         del_var = del_var - 2000;
+        info!("Set LCD brightness to {}", del_var);
         // // // If updated delay value drops below 200 then reset it back to starting value
         if del_var < 2000 {
             del_var = LCD_MAX_DUTY_CYCLE.load(Ordering::Relaxed);
         }
         // // Updated delay value to global context
         LCD_DUTY_CYCLE.store(del_var, Ordering::Relaxed);
-        let mut redraw = LCD_REDRAW.lock().await;
 
-        *redraw = true;
-
-        info!("yo");
+        LCD_REFRESH.store(true, Ordering::Relaxed);
 
         // let mut d = static_rst.lock().await;
         // if d.is_set_high() {
@@ -204,5 +201,26 @@ async fn main(spawner: Spawner) {
         // } else {
         //     d.set_high();
         // }
+    }
+}
+
+
+#[embassy_executor::task]
+async fn btn_right_task(mut input: ExtiInput<'static>) {
+    loop {
+        input.wait_for_rising_edge().await;
+        LCD_NEXT_ITEM.store(true, Ordering::Relaxed);
+        info!("Right button pressed");
+        Timer::after_millis(100).await;
+    }
+}
+
+#[embassy_executor::task]
+async fn btn_enter_task(mut input: ExtiInput<'static>) {
+    loop {
+        input.wait_for_rising_edge().await;
+        LCD_ENTER_ITEM.store(true, Ordering::Relaxed);
+        info!("Enter button pressed");
+        Timer::after_millis(100).await;
     }
 }

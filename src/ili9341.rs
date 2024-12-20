@@ -1,27 +1,21 @@
 use core::{
-    convert::{Infallible, TryInto},
-    fmt::Write,
+    convert::{Infallible, TryInto}, sync::atomic::Ordering,
 };
 
 use defmt::info;
-use embassy_stm32::{gpio::Output, mode::Async, pac::spi::Spi};
+use embassy_stm32::{gpio::Output, mode::Async};
 use embassy_sync::{blocking_mutex::raw::ThreadModeRawMutex, mutex::Mutex};
 use embassy_time::{Instant, Timer};
-use embedded_graphics::{
-    iterator::pixel,
-    primitives::{PrimitiveStyleBuilder, StyledDrawable},
-};
 use ili9341regs::{LcdOrientation, COLUMNS, PAGES};
-use stm_graphics::scene_manager;
-
-use crate::{spidriver::SPIDriver, LCD_REDRAW};
-use heapless::String;
+use stm_graphics::{scene_manager, Date, DateTime, Time};
 
 use embedded_graphics_core::{
     pixelcolor::{raw::RawU16, Rgb565},
     prelude::*,
     primitives::Rectangle,
 };
+
+use crate::{LCD_ENTER_ITEM, LCD_NEXT_ITEM, LCD_REFRESH};
 
 mod ili9341regs {
     macro_rules! mcpregs {
@@ -84,16 +78,6 @@ mod ili9341regs {
 
     pub const COLUMNS: u16 = 240;
     pub const PAGES: u16 = 320;
-
-    pub const CHAR_START: usize = 0x20;
-
-    pub const FONT: &[u8] = include_bytes!("../assets/font.bin");
-}
-
-struct DrawCommand {
-    x: u16,
-    y: u16,
-    // color: [u16; 128],
 }
 
 pub struct ILI9341 {
@@ -101,7 +85,6 @@ pub struct ILI9341 {
     dc: &'static Mutex<ThreadModeRawMutex, Output<'static>>,
     rst: &'static Mutex<ThreadModeRawMutex, Output<'static>>,
     orientation: LcdOrientation,
-    // queue: [DrawCommand; 8]
 }
 
 impl ILI9341 {
@@ -114,11 +97,6 @@ impl ILI9341 {
         ILI9341 {
             driver: device,
             orientation: lcd_orientation,
-            // queue: core::array::from_fn(|_| DrawCommand {
-            //     x: 0,
-            //     y: 0,
-            //     color: [0; 128]
-            // }),
             dc,
             rst,
         }
@@ -154,10 +132,10 @@ impl ILI9341 {
         let (p1h, p1l) = Self::u16_to_bytes(p1);
 
         self.write_command(&[ili9341regs::COLUMN_ADDRESS_SET]);
-        self.driver.blocking_write(&[c0h, c0l, c1h, c1l]);
+        let _ = self.driver.blocking_write(&[c0h, c0l, c1h, c1l]);
 
         self.write_command(&[ili9341regs::PAGE_ADDRESS_SET]);
-        self.driver.blocking_write(&[p0h, p0l, p1h, p1l]);
+        let _ = self.driver.blocking_write(&[p0h, p0l, p1h, p1l]);
 
         self.write_command(&[ili9341regs::MEMORY_WRITE]);
     }
@@ -186,7 +164,7 @@ impl ILI9341 {
         // slight buffer overflow seems ok
         let chunk = Self::color_buffer::<32>(color);
         for _ in 0..(w as u32 * h as u32).div_ceil(16) {
-            self.driver.blocking_write(&chunk);
+            let _ = self.driver.blocking_write(&chunk);
         }
     }
 
@@ -198,118 +176,19 @@ impl ILI9341 {
     pub fn draw_raw_iter(&mut self, x0: u16, y0: u16, x1: u16, y1: u16, data: &[u8]) {
         self.set_window(x0, y0, x1, y1);
         self.enable_write_data();
-
-        // for _ in 0..(x1 as u32 * y1 as u32).div_ceil(16) {
-        self.driver.blocking_write(&data);
-        // }
-    }
-
-    pub fn draw_sprite(&mut self, x: u16, y: u16, w: u16, h: u16, data: &[u8]) {
-        self.set_window(x, y, x + w, y + h);
-        self.driver.blocking_write(&data);
-    }
-
-    pub fn draw_text(
-        &mut self,
-        x: u16,
-        y: u16,
-        text: &str,
-        fg_color: u16,
-        bg_color: u16,
-        scale: u16,
-    ) {
-        let mut cx = x;
-
-        for c in text.bytes() {
-            let offset = 8 * (c as usize - ili9341regs::CHAR_START);
-            let data: [u8; 8] = ili9341regs::FONT[offset..offset + 8]
-                .try_into()
-                .unwrap_or_default();
-            self.draw_character(cx, y, &data, fg_color, bg_color, scale);
-            cx += scale * 8
-        }
-    }
-
-    fn draw_character(
-        &mut self,
-        x: u16,
-        y: u16,
-        data: &[u8; 8],
-        fg_color: u16,
-        bg_color: u16,
-        scale: u16,
-    ) {
-        // TODO make readable
-        self.set_window(x, y, x + scale * 8, y + scale * 8);
-
-        let (fgh, fgl) = u16_to_bytes(fg_color);
-        let (bgh, bgl) = u16_to_bytes(bg_color);
-
-        let mut buffer = [0; 16];
-        let chunk = 8 / scale;
-
-        self.enable_write_data();
-
-        for row in 0..8 {
-            for _ in 0..scale {
-                for bit_offset in (0..scale).rev() {
-                    let bit_start = bit_offset * chunk;
-                    let bit_end = (bit_offset + 1) * chunk;
-                    for i in bit_start..bit_end {
-                        let (h, l) = if data[row] >> i & 1 == 0 {
-                            (bgh, bgl)
-                        } else {
-                            (fgh, fgl)
-                        };
-                        let offset = 16 - ((i - bit_start + 1) * 2 * scale) as usize;
-                        for b in 0..scale as usize {
-                            buffer[offset + 2 * b + 1] = l;
-                            buffer[offset + 2 * b] = h;
-                        }
-                    }
-                    self.driver.blocking_write(&buffer);
-                }
-            }
-        }
-    }
-
-    pub fn draw_line(&mut self, x1: i16, y1: i16, x2: i16, y2: i16, color: u16) {
-        let dx = (x2 - x1).abs();
-        let dy = -(y2 - y1).abs();
-        let sx = if x1 < x2 { 1 } else { -1 };
-        let sy = if y1 < y2 { 1 } else { -1 };
-        let mut err = dx + dy;
-
-        let mut x = x1;
-        let mut y = y1;
-
-        loop {
-            self.draw_pixel(x as u16, y as u16, color);
-            if x == x2 && y == y2 {
-                break;
-            }
-            let e2 = 2 * err;
-            if e2 >= dy {
-                err += dy;
-                x += sx;
-            }
-            if e2 <= dx {
-                err += dx;
-                y += sy;
-            }
-        }
+        let _ = self.driver.blocking_write(&data);
     }
 
     pub fn draw_pixel(&mut self, x: u16, y: u16, color: u16) {
         self.set_window(x, y, x + 1, y + 1);
-        self.driver.blocking_write(&Self::color_buffer::<2>(color));
+        let _ = self.driver.blocking_write(&Self::color_buffer::<2>(color));
     }
 
     fn write_command(&mut self, byte: &[u8]) {
         // let mut spi = self.try_lock().unwrap();?
         let mut dc = self.dc.try_lock().unwrap();
         dc.set_low();
-        self.driver.blocking_write(byte);
+        let _ = self.driver.blocking_write(byte);
         dc.set_high();
     }
 
@@ -334,69 +213,69 @@ impl ILI9341 {
         Timer::after_millis(100).await;
 
         self.write_command(&[0xef]); // unknown
-        self.driver.blocking_write(&[0x03u8, 0x80u8, 0x02u8]);
+        let _ = self.driver.blocking_write(&[0x03u8, 0x80u8, 0x02u8]);
 
         self.write_command(&[ili9341regs::POWER_CONTROL_B]); // unknown
-        self.driver.blocking_write(&[0x00u8, 0xc1u8, 0x30u8]);
+        let _ = self.driver.blocking_write(&[0x00u8, 0xc1u8, 0x30u8]);
 
         self.write_command(&[ili9341regs::POWER_ON_SEQ_CONTROL]);
-        self.driver.blocking_write(&[0x64u8, 0x03u8, 0x12u8, 0x81]);
+        let _ = self.driver.blocking_write(&[0x64u8, 0x03u8, 0x12u8, 0x81]);
 
         self.write_command(&[ili9341regs::DRIVER_TIMING_CONTROL_A]);
-        self.driver.blocking_write(&[0x85u8, 0x00u8, 0x78]);
+        let _ = self.driver.blocking_write(&[0x85u8, 0x00u8, 0x78]);
 
         self.write_command(&[ili9341regs::POWER_CONTROL_A]);
-        self.driver
+        let _ = self.driver
             .blocking_write(&[0x39u8, 0x2cu8, 0x00u8, 0x34u8, 0x02]);
 
         self.write_command(&[ili9341regs::PUMP_RATIO_CONTROL]);
-        self.driver.blocking_write(&[0x20u8]);
+        let _ = self.driver.blocking_write(&[0x20u8]);
 
         self.write_command(&[ili9341regs::DRIVER_TIMING_CONTROL_B]);
-        self.driver.blocking_write(&[0x00u8, 0x00]);
+        let _ = self.driver.blocking_write(&[0x00u8, 0x00]);
 
         self.write_command(&[ili9341regs::POWER_CONTROL_1]);
-        self.driver.blocking_write(&[0x23u8]);
+        let _ = self.driver.blocking_write(&[0x23u8]);
 
         self.write_command(&[ili9341regs::POWER_CONTROL_2]);
-        self.driver.blocking_write(&[0x10u8]);
+        let _ = self.driver.blocking_write(&[0x10u8]);
 
         self.write_command(&[ili9341regs::VCOM_CONTROL_1]);
-        self.driver.blocking_write(&[0x3eu8, 0x28]);
+        let _ = self.driver.blocking_write(&[0x3eu8, 0x28]);
 
         self.write_command(&[ili9341regs::VCOM_CONTROL_2]);
-        self.driver.blocking_write(&[0x86u8]);
+        let _ = self.driver.blocking_write(&[0x86u8]);
 
         self.write_command(&[ili9341regs::MEMORY_ACCESS_CONTROL]);
-        self.driver
+        let _ = self.driver
             .blocking_write(&[self.memory_access_control_value()]);
 
         self.write_command(&[ili9341regs::VERTICAL_SCROLL_START_ADDR]); // unknown
-        self.driver.blocking_write(&[0x00u8]);
+        let _ = self.driver.blocking_write(&[0x00u8]);
 
         self.write_command(&[ili9341regs::PIXEL_FORMAT_SET]);
-        self.driver.blocking_write(&[0x55u8]);
+        let _ = self.driver.blocking_write(&[0x55u8]);
 
         self.write_command(&[ili9341regs::FRAME_CONTROL_NORMAL_MODE]);
-        self.driver.blocking_write(&[0x00u8, 0x18]);
+        let _ = self.driver.blocking_write(&[0x00u8, 0x18]);
 
         self.write_command(&[ili9341regs::DISPLAY_FUNCTION_CONTROL]);
-        self.driver.blocking_write(&[0x08u8, 0x82u8, 0x27]);
+        let _ = self.driver.blocking_write(&[0x08u8, 0x82u8, 0x27]);
 
         self.write_command(&[ili9341regs::ENABLE_3G]);
-        self.driver.blocking_write(&[0x00u8]);
+        let _ = self.driver.blocking_write(&[0x00u8]);
 
         self.write_command(&[ili9341regs::GAMMA_SET]);
-        self.driver.blocking_write(&[0x01u8]);
+        let _ = self.driver.blocking_write(&[0x01u8]);
 
         self.write_command(&[ili9341regs::POSITIVE_GAMMA_CORRECTION]);
-        self.driver.blocking_write(&[
+        let _ = self.driver.blocking_write(&[
             0x0fu8, 0x31u8, 0x2bu8, 0x0cu8, 0x0eu8, 0x08u8, 0x4eu8, 0xf1u8, 0x37u8, 0x07u8, 0x10u8,
             0x03u8, 0x0eu8, 0x09u8, 0x00,
         ]);
 
         self.write_command(&[ili9341regs::NEGATIVE_GAMMA_CORRECTION]);
-        self.driver.blocking_write(&[
+        let _ = self.driver.blocking_write(&[
             0x00u8, 0x0eu8, 0x14u8, 0x03u8, 0x11u8, 0x07u8, 0x31u8, 0xc1u8, 0x48u8, 0x08u8, 0x0fu8,
             0x0cu8, 0x31u8, 0x36u8, 0x0f,
         ]);
@@ -431,7 +310,6 @@ impl DrawTarget for ILI9341 {
                 let y = point.y as u16;
                 let color = RawU16::from(color).into_inner();
                 self.draw_pixel(x, y, color);
-                // push_queue(&mut self, x, y, color);
             }
         }
         Ok(())
@@ -512,28 +390,6 @@ impl DrawTarget for ILI9341 {
     }
 }
 
-pub fn rgb_to_u16(r: u8, g: u8, b: u8) -> u16 {
-    let rb = r >> 3;
-    let gb = g >> 2;
-    let bb = b >> 3;
-    (rb as u16) << 11 | (gb as u16) << 5 | bb as u16
-}
-
-/// Combine RGB channels into 565 RGB format - as a (u8, u8) tuple
-pub fn rgb_to_u8(r: u8, g: u8, b: u8) -> (u8, u8) {
-    u16_to_bytes(rgb_to_u16(r, g, b))
-}
-
-pub(crate) fn u16_to_bytes(val: u16) -> (u8, u8) {
-    ((val >> 8) as u8, (val & 0xff) as u8)
-}
-
-/// Create a single colored buffer of N/2 pixel length
-pub fn color_buffer<const N: usize>(color: u16) -> [u8; N] {
-    let (h, l) = u16_to_bytes(color);
-    core::array::from_fn(|i| if i % 2 == 0 { h } else { l })
-}
-
 #[embassy_executor::task]
 pub async fn screen_task(
     lcd: embassy_stm32::spi::Spi<'static, Async>,
@@ -547,10 +403,11 @@ pub async fn screen_task(
     defmt::info!("ILI9341 init done");
 
     let mut scene_manager = scene_manager::SceneManager::new();
+    // let mut scene_manager = scene_manager::SceneManager::instance().lock().await;
     scene_manager.add_scene(stm_graphics::startup::build_startup());
 
-    let status_bar = stm_graphics::StatusBar::new(22, 32);
-    let battery_indicator = stm_graphics::battery::BatteryIndicator::new(0xAA);
+    let mut status_bar = stm_graphics::StatusBar::new(22, 32);
+    let mut battery_indicator = stm_graphics::battery::BatteryIndicator::new(0xAA);
 
     // Timer::after_millis(1000).await;
     ili9341_lcd.clear(0xFFFF);
@@ -559,30 +416,33 @@ pub async fn screen_task(
     Timer::after_millis(500).await;
     let mut lastrun = 0;
     let mut r = status_bar.draw(&mut ili9341_lcd);
-    r = battery_indicator.draw(&mut ili9341_lcd);
-    scene_manager.draw_active_scene(&mut ili9341_lcd);
-    // let style = PrimitiveStyleBuilder::new()
-    // // .stroke_color(Rgb565::WHITE)
-    // // .stroke_width(3)
-    // .fill_color(Rgb565::CSS_ORANGE_RED)
-    // .build();
-    // Rectangle::new(Point::new((320-150)/2, (240-150)/2), Size::new(150, 150))
-    //     .draw_styled(&style, &mut ili9341_lcd)
-    //     .unwrap();
+    let _ = r = battery_indicator.draw(&mut ili9341_lcd);
+    let _ = scene_manager.draw_active_scene(&mut ili9341_lcd);
+
+
+    let state = stm_graphics::State { pressure: 12.0, temperature: 35.0, datetime: DateTime { date: Date { day: 12, month: 8, year: 2021 }, time: Time::new(22, 35) }, battery: 0xFF };
 
     loop {
         // let state = crate::STATE.lock().await;
+        let mut refresh = LCD_REFRESH.load(Ordering::Relaxed);
+        let next_pressed = LCD_NEXT_ITEM.load(Ordering::Relaxed);
+        if next_pressed {
+            scene_manager.get_active_scene().unwrap().select_next_toggleable();
+            LCD_NEXT_ITEM.store(false, Ordering::Relaxed);
+            refresh = true;
+        }
 
-        // scene_manager.get_active_scene().unwrap().update(&state);
-        // s.write_fmt(format_args!("Time: {:02}:{:02}", state.time[0], state.time[1])).unwrap();
-        // ili9341_lcd.draw_text((320-160/2)/2, 240/2 - 80, s.as_str(), 0xFFFF, 0x0000, 1).await;
-        // s.clear();
-        // s.write_fmt(format_args!("Temperature: {:.2} C", state.temperature)).unwrap();
-        // ili9341_lcd.draw_text((320-160/2)/2, 240/2 - 50, s.as_str(), 0xFFFF, 0x0000, 1).await;
-        // ili9341_lcd.draw_line(0, 50, 320, 50, 0xff00).await;
-        r = status_bar.draw(&mut ili9341_lcd);
-        r = battery_indicator.draw(&mut ili9341_lcd);
-        scene_manager.draw_active_scene(&mut ili9341_lcd);
+        let enter_pressed = LCD_ENTER_ITEM.load(Ordering::Relaxed);
+        if enter_pressed {
+            scene_manager.get_active_scene().unwrap().click_currently_toggled();
+            LCD_ENTER_ITEM.store(false, Ordering::Relaxed);
+            refresh = true;
+        }
+        scene_manager.get_active_scene().unwrap().update(&state);
+        if refresh {
+            let _ = scene_manager.draw_active_scene(&mut ili9341_lcd);
+            LCD_REFRESH.store(false, Ordering::Relaxed);
+        }
         info!("Redraw: {}", Instant::now().as_millis() - lastrun);
         lastrun = Instant::now().as_millis();
         Timer::after_millis(33).await;

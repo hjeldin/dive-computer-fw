@@ -443,7 +443,6 @@ pub async fn screen_task(
             let _ = scene_manager.draw_active_scene(&mut ili9341_lcd);
             LCD_REFRESH.store(false, Ordering::Relaxed);
         }
-        info!("Redraw: {}", Instant::now().as_millis() - lastrun);
         lastrun = Instant::now().as_millis();
         Timer::after_millis(33).await;
     }

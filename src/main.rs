@@ -1,14 +1,14 @@
 #![no_main]
 #![no_std]
 
-use core::sync::atomic::{AtomicBool, AtomicU16, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU16, AtomicU8, Ordering};
 use defmt::info;
 use embassy_executor::Spawner;
 use embassy_stm32::exti::ExtiInput;
 use embassy_stm32::gpio::{Level, Output, Pull, Speed};
 use embassy_stm32::i2c::{self, I2c};
 use embassy_stm32::mode::Async;
-use embassy_stm32::peripherals::{DMA1_CH2, DMA1_CH3, PA10, TIM1};
+use embassy_stm32::peripherals::{DMA1_CH1, DMA1_CH3, DMA1_CH5, DMA2_CH1, PA10, PA2, PB5, TIM1, TIM2, TIM3};
 use embassy_stm32::spi::{self, Spi};
 use embassy_stm32::time::Hertz;
 use embassy_stm32::timer::simple_pwm::PwmPin;
@@ -32,12 +32,14 @@ static LCD_MAX_DUTY_CYCLE: AtomicU16 = AtomicU16::new(0);
 static LCD_REFRESH: AtomicBool = AtomicBool::new(false);
 static LCD_NEXT_ITEM: AtomicBool = AtomicBool::new(false);
 static LCD_ENTER_ITEM: AtomicBool = AtomicBool::new(false);
+static TRIGGER_BUZZ: AtomicU16 = AtomicU16::new(0);
+static TRIGGER_VOLUME: AtomicU16 = AtomicU16::new(0);
 
 #[embassy_executor::task]
 async fn pwm_task(
     pwm_pin: PA10,
     timer: TIM1,
-    dma_channel: &'static mut Mutex<ThreadModeRawMutex, DMA1_CH3>,
+    dma_channel: &'static mut Mutex<ThreadModeRawMutex, DMA1_CH1>,
 ) {
     let _dma = dma_channel.lock().await;
     let lcd_brightness = PwmPin::new_ch3(pwm_pin, embassy_stm32::gpio::OutputType::PushPull);
@@ -61,6 +63,49 @@ async fn pwm_task(
         let del = LCD_DUTY_CYCLE.load(Ordering::Relaxed);
         pwm.channel(pwm_channel).set_duty_cycle(del as u16);
         Timer::after_millis(100).await;
+    }
+}
+
+
+#[embassy_executor::task]
+async fn buzzer_pwm_task(
+    pwm_pin: PB5,
+    timer: TIM3,
+    dma_channel: &'static mut Mutex<ThreadModeRawMutex, DMA1_CH3>,
+) {
+    let _dma = dma_channel.lock().await;
+    let lcd_brightness = PwmPin::new_ch2(pwm_pin, embassy_stm32::gpio::OutputType::PushPull);
+    let mut pwm = embassy_stm32::timer::simple_pwm::SimplePwm::new(
+        timer,
+        None,
+        Some(lcd_brightness),
+        None,
+        None,
+        Hertz(1000),
+        embassy_stm32::timer::low_level::CountingMode::EdgeAlignedUp,
+    );
+    let max_duty = pwm.max_duty_cycle();   
+    let pwm_channel = embassy_stm32::timer::Channel::Ch2;
+    TRIGGER_VOLUME.store(max_duty/2, Ordering::Relaxed);
+    pwm.set_frequency(Hertz(440));
+    pwm.channel(pwm_channel).set_duty_cycle(TRIGGER_VOLUME.load(Ordering::Relaxed));
+    pwm.channel(pwm_channel).enable();
+    // pwm.channel(pwm_channel)
+    Timer::after_millis(100).await;
+    pwm.channel(pwm_channel).disable();
+    loop {
+        let buzz = TRIGGER_BUZZ.load(Ordering::Relaxed);
+        if buzz == 0 {
+            Timer::after_millis(100).await;
+            continue;
+        }
+        pwm.set_frequency(Hertz(buzz as u32));
+        pwm.channel(pwm_channel).enable();
+        pwm.channel(pwm_channel).set_duty_cycle(TRIGGER_VOLUME.load(Ordering::Relaxed));
+        defmt::info!("Buzzing with {}Hz at {}", buzz, TRIGGER_VOLUME.load(Ordering::Relaxed));
+        Timer::after_millis(100).await;
+        pwm.channel(pwm_channel).disable();
+        TRIGGER_BUZZ.store(0, Ordering::Relaxed);
     }
 }
 
@@ -98,7 +143,8 @@ async fn main(spawner: Spawner) {
         StaticCell::new();
     static SHARED_DC: StaticCell<Mutex<ThreadModeRawMutex, Output<'static>>> = StaticCell::new();
     static SHARED_RST: StaticCell<Mutex<ThreadModeRawMutex, Output<'static>>> = StaticCell::new();
-    static SHARED_DMA1_CH5: StaticCell<Mutex<ThreadModeRawMutex, DMA1_CH3>> = StaticCell::new();
+    static SHARED_DMA1_CH3: StaticCell<Mutex<ThreadModeRawMutex, DMA1_CH3>> = StaticCell::new();
+    static SHARED_DMA1_CH1: StaticCell<Mutex<ThreadModeRawMutex, DMA1_CH1>> = StaticCell::new();
 
     let mut i2c_config = i2c::Config::default();
     i2c_config.timeout = embassy_time::Duration::from_millis(1000);
@@ -116,7 +162,7 @@ async fn main(spawner: Spawner) {
 
     let mut spi_config = spi::Config::default();
     spi_config.bit_order = spi::BitOrder::MsbFirst;
-    spi_config.frequency = Hertz(32_000_000);
+    spi_config.frequency = Hertz(4_000_000);
 
     let spi = Spi::new(
         p.SPI2, p.PB13, //SCK
@@ -154,29 +200,30 @@ async fn main(spawner: Spawner) {
         .spawn(ili9341::screen_task(spi, static_dc, static_rst))
         .unwrap();
     // spawner.spawn(ms5837::ms5837_task(ms5837_driver)).unwrap();
-    // spawner.spawn(decotask::deco_task()).unwrap();
+    spawner.spawn(decotask::deco_task()).unwrap();
 
     let mut button = ExtiInput::new(p.PC13, p.EXTI13, Pull::Up);
 
-    let mut button_right = ExtiInput::new(p.PA1, p.EXTI1, Pull::Up);
+    let button_right = ExtiInput::new(p.PA1, p.EXTI1, Pull::Up);
 
     spawner.spawn(btn_right_task(button_right)).unwrap();
 
-    let mut button_enter = ExtiInput::new(p.PA4, p.EXTI4, Pull::Up);
+    let button_enter = ExtiInput::new(p.PA4, p.EXTI4, Pull::Up);
 
     spawner.spawn(btn_enter_task(button_enter)).unwrap();
 
-    let static_dma1_ch5: &mut Mutex<ThreadModeRawMutex, DMA1_CH3> =
-        SHARED_DMA1_CH5.init(Mutex::new(p.DMA1_CH3));
+    let static_dma1_ch3: &mut Mutex<ThreadModeRawMutex, DMA1_CH3> =
+        SHARED_DMA1_CH3.init(Mutex::new(p.DMA1_CH3));
+    let static_dma1_ch1: &mut Mutex<ThreadModeRawMutex, DMA1_CH1> =
+        SHARED_DMA1_CH1.init(Mutex::new(p.DMA1_CH1));
     spawner
-        .spawn(pwm_task(p.PA10, p.TIM1, static_dma1_ch5))
+        .spawn(pwm_task(p.PA10, p.TIM1,  static_dma1_ch1))
         .unwrap();
 
-    // Timer::after_millis(200).await;
-    // rst.set_low();
-    // Timer::after_millis(200).await;
-    // rst.set_high();
-    // Timer::after_millis(200).await;
+    spawner
+        .spawn(buzzer_pwm_task(p.PB5, p.TIM3, static_dma1_ch3))
+        .unwrap();
+
     cs.set_low();
 
     loop {
@@ -211,6 +258,7 @@ async fn btn_right_task(mut input: ExtiInput<'static>) {
         input.wait_for_rising_edge().await;
         LCD_NEXT_ITEM.store(true, Ordering::Relaxed);
         info!("Right button pressed");
+        TRIGGER_BUZZ.store(100, Ordering::Relaxed);
         Timer::after_millis(100).await;
     }
 }
@@ -221,6 +269,7 @@ async fn btn_enter_task(mut input: ExtiInput<'static>) {
         input.wait_for_rising_edge().await;
         LCD_ENTER_ITEM.store(true, Ordering::Relaxed);
         info!("Enter button pressed");
+        TRIGGER_BUZZ.store(1000, Ordering::Relaxed);
         Timer::after_millis(100).await;
     }
 }

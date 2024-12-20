@@ -1,3 +1,5 @@
+use core::sync::atomic::Ordering;
+use defmt::info;
 use embassy_time::Timer;
 
 #[allow(dead_code)]
@@ -116,6 +118,7 @@ impl<'a> ENS160<'a> {
 }
 
 use crate::i2cdriver::I2CDriver;
+use crate::LOW_POWER_MODE;
 
 #[embassy_executor::task]
 pub async fn ens_task(sensor: I2CDriver<'static>) {
@@ -130,6 +133,10 @@ pub async fn ens_task(sensor: I2CDriver<'static>) {
         sensor.get_eco2().await;
         sensor.get_aqi().await;
         Timer::after_millis(1000).await;
+        if(LOW_POWER_MODE.load(Ordering::Relaxed) == true){
+            info!("[ENS160] Low power mode");
+            return;
+        }
     }
     // set_opmode(i2c, 0x53, 0x00);
 }

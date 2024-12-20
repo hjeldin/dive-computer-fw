@@ -15,7 +15,7 @@ use embedded_graphics_core::{
     primitives::Rectangle,
 };
 
-use crate::{LCD_ENTER_ITEM, LCD_NEXT_ITEM, LCD_REFRESH};
+use crate::{LCD_ENTER_ITEM, LCD_NEXT_ITEM, LCD_REFRESH, LOW_POWER_MODE};
 
 mod ili9341regs {
     macro_rules! mcpregs {
@@ -445,5 +445,9 @@ pub async fn screen_task(
         }
         lastrun = Instant::now().as_millis();
         Timer::after_millis(33).await;
+        if(LOW_POWER_MODE.load(Ordering::Relaxed) == true){
+            info!("[Display] Low power mode");
+            return;
+        }
     }
 }

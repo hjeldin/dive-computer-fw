@@ -1,8 +1,11 @@
+use core::sync::atomic::Ordering;
+use defmt::info;
 use embassy_sync::{blocking_mutex::raw::ThreadModeRawMutex, mutex::Mutex};
 use embassy_time::Timer;
 use static_cell::StaticCell;
 
 use crate::i2cdriver::I2CDriver;
+use crate::LOW_POWER_MODE;
 
 #[allow(dead_code)]
 mod ms5837regs {
@@ -174,5 +177,9 @@ pub async fn ms5837_task(sensor: I2CDriver<'static>) {
         // state.pressure = result.0;
         // state.temperature = result.1;
         Timer::after_millis(1000).await;
+        if(LOW_POWER_MODE.load(Ordering::Relaxed) == true){
+            info!("[MS5837] Low power mode");
+            return;
+        }
     }
 }

@@ -8,10 +8,9 @@ use embassy_stm32::exti::ExtiInput;
 use embassy_stm32::gpio::{Level, Output, Pull, Speed};
 use embassy_stm32::i2c::{self, I2c};
 use embassy_stm32::mode::Async;
-use embassy_stm32::peripherals::{DMA1_CH1, DMA1_CH3, PA10, PB5, TIM1, TIM3};
+use embassy_stm32::peripherals::{DMA1_CH1, DMA1_CH3};
 use embassy_stm32::spi::{self, Spi};
 use embassy_stm32::time::Hertz;
-use embassy_stm32::timer::simple_pwm::PwmPin;
 use embassy_stm32::{bind_interrupts, peripherals};
 use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex;
 use embassy_sync::mutex::Mutex;
@@ -23,6 +22,7 @@ use {defmt_rtt as _, panic_probe as _};
 use crate::i2cdriver::I2CDriver;
 use crate::tasks::buzzer::buzzer_pwm_task;
 use crate::tasks::lcd_brightness::lcd_brightness_task;
+use crate::tasks::no_interaction::no_interaction_task;
 
 mod bmp280;
 mod decotask;
@@ -41,6 +41,8 @@ static LCD_NEXT_ITEM: AtomicBool = AtomicBool::new(false);
 static LCD_ENTER_ITEM: AtomicBool = AtomicBool::new(false);
 static TRIGGER_BUZZ: AtomicU16 = AtomicU16::new(0);
 static TRIGGER_VOLUME: AtomicU16 = AtomicU16::new(0);
+static INTERACTION: AtomicBool = AtomicBool::new(false);
+static LOW_POWER_MODE: AtomicBool = AtomicBool::new(false);
 
 bind_interrupts!(struct Irqs {
     I2C1_EV => i2c::EventInterruptHandler<peripherals::I2C1>;
@@ -130,37 +132,36 @@ async fn main(spawner: Spawner) {
 
     let ms5837_driver = I2CDriver::new(static_i2c, 0x76);
 
-    // spawner.spawn(ens160::ens_task(ens160_driver)).unwrap();
-    //
-    // spawner.spawn(bmp280::bmp_task(bmp280_driver)).unwrap();
-
-    spawner
-        .spawn(ili9341::screen_task(spi, static_dc, static_rst))
-        .unwrap();
-    // spawner.spawn(ms5837::ms5837_task(ms5837_driver)).unwrap();
-    spawner.spawn(decotask::deco_task()).unwrap();
 
     let mut button = ExtiInput::new(p.PC13, p.EXTI13, Pull::Up);
 
     let button_right = ExtiInput::new(p.PA1, p.EXTI1, Pull::Up);
 
-    spawner.spawn(btn_right_task(button_right)).unwrap();
 
     let button_enter = ExtiInput::new(p.PA4, p.EXTI4, Pull::Up);
-
-    spawner.spawn(btn_enter_task(button_enter)).unwrap();
 
     let static_dma1_ch3: &mut Mutex<ThreadModeRawMutex, DMA1_CH3> =
         SHARED_DMA1_CH3.init(Mutex::new(p.DMA1_CH3));
     let static_dma1_ch1: &mut Mutex<ThreadModeRawMutex, DMA1_CH1> =
         SHARED_DMA1_CH1.init(Mutex::new(p.DMA1_CH1));
+
+
+    // spawner.spawn(ens160::ens_task(ens160_driver)).unwrap();
+    // spawner.spawn(bmp280::bmp_task(bmp280_driver)).unwrap();
+    // spawner.spawn(ms5837::ms5837_task(ms5837_driver)).unwrap();
+    spawner
+        .spawn(ili9341::screen_task(spi, static_dc, static_rst))
+        .unwrap();
+    spawner.spawn(decotask::deco_task()).unwrap();
+    spawner.spawn(btn_right_task(button_right)).unwrap();
+    spawner.spawn(btn_enter_task(button_enter)).unwrap();
     spawner
         .spawn(lcd_brightness_task(p.PA10, p.TIM1, static_dma1_ch1))
         .unwrap();
-
     spawner
         .spawn(buzzer_pwm_task(p.PB5, p.TIM3, static_dma1_ch3))
         .unwrap();
+    spawner.spawn(no_interaction_task()).unwrap();
 
     cs.set_low();
 
@@ -169,6 +170,10 @@ async fn main(spawner: Spawner) {
         // Check if button got pressed
         button.wait_for_rising_edge().await;
         Timer::after_millis(100).await;
+        if(LOW_POWER_MODE.load(Ordering::Relaxed) == true){
+            info!("[MAIN] Low power mode");
+            return;
+        }
         del_var = del_var - 2000;
         info!("Set LCD brightness to {}", del_var);
         // // // If updated delay value drops below 200 then reset it back to starting value

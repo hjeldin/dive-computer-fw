@@ -1,6 +1,9 @@
+use core::sync::atomic::Ordering;
+use defmt::info;
 use embassy_time::Timer;
 
 use crate::i2cdriver::I2CDriver;
+use crate::LOW_POWER_MODE;
 
 #[allow(dead_code)]
 mod bmp280regs {
@@ -324,6 +327,10 @@ pub async fn bmp_task(sensor: I2CDriver<'static>) {
         bmp280_sensor.get_temp().await;
         // bmp280_sensor.get_hum().await;
         Timer::after_millis(1000).await;
+        if(LOW_POWER_MODE.load(Ordering::Relaxed) == true){
+            info!("[BMP280] Low power mode");
+            return;
+        }
     }
     // set_opmode(i2c, 0x53, 0x00);
 }

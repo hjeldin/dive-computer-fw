@@ -1,5 +1,8 @@
+use core::sync::atomic::Ordering;
+use defmt::info;
 use dive_deco_x86::*;
 use embassy_time::Timer;
+use crate::LOW_POWER_MODE;
 
 #[embassy_executor::task]
 pub async fn deco_task() {
@@ -20,5 +23,9 @@ pub async fn deco_task() {
         defmt::info!("{:?}", result);
         defmt::info!("pressure {:?}", amb_pressure);
         Timer::after_millis(1000).await;
+        if(LOW_POWER_MODE.load(Ordering::Relaxed) == true){
+            info!("[DECO] Low power mode");
+            return;
+        }
     }
 }

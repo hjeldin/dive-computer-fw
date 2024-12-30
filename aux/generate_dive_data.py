@@ -10,7 +10,7 @@ bottom = False;
 
 target_depth = 40
 
-bottom_time = 14 * 60
+bottom_time = 35 * 60
 descent_speed = 0.33 # m/s
 ascent_speed = 0.17 # m/s
 safety_stop_speed = 0.083 # m/s

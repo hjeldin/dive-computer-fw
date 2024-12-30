@@ -1,5 +1,7 @@
 use core::{
-    convert::{Infallible, TryInto}, sync::atomic::Ordering,
+    convert::{Infallible, TryInto},
+    mem,
+    sync::atomic::Ordering,
 };
 
 use defmt::info;
@@ -9,13 +11,12 @@ use embassy_time::{Instant, Timer};
 use ili9341regs::{LcdOrientation, COLUMNS, PAGES};
 use stm_graphics::{scene_manager, Date, DateTime, Time};
 
+use crate::{LCD_ENTER_ITEM, LCD_NEXT_ITEM, LCD_REFRESH, LOW_POWER_MODE};
 use embedded_graphics_core::{
     pixelcolor::{raw::RawU16, Rgb565},
     prelude::*,
     primitives::Rectangle,
 };
-
-use crate::{LCD_ENTER_ITEM, LCD_NEXT_ITEM, LCD_REFRESH, LOW_POWER_MODE};
 
 mod ili9341regs {
     macro_rules! mcpregs {
@@ -100,6 +101,10 @@ impl ILI9341 {
             dc,
             rst,
         }
+    }
+
+    fn get_device(self) -> embassy_stm32::spi::Spi<'static, Async> {
+        self.driver
     }
 
     fn memory_access_control_value(&self) -> u8 {
@@ -225,7 +230,8 @@ impl ILI9341 {
         let _ = self.driver.blocking_write(&[0x85u8, 0x00u8, 0x78]);
 
         self.write_command(&[ili9341regs::POWER_CONTROL_A]);
-        let _ = self.driver
+        let _ = self
+            .driver
             .blocking_write(&[0x39u8, 0x2cu8, 0x00u8, 0x34u8, 0x02]);
 
         self.write_command(&[ili9341regs::PUMP_RATIO_CONTROL]);
@@ -247,7 +253,8 @@ impl ILI9341 {
         let _ = self.driver.blocking_write(&[0x86u8]);
 
         self.write_command(&[ili9341regs::MEMORY_ACCESS_CONTROL]);
-        let _ = self.driver
+        let _ = self
+            .driver
             .blocking_write(&[self.memory_access_control_value()]);
 
         self.write_command(&[ili9341regs::VERTICAL_SCROLL_START_ADDR]); // unknown
@@ -419,22 +426,39 @@ pub async fn screen_task(
     let _ = r = battery_indicator.draw(&mut ili9341_lcd);
     let _ = scene_manager.draw_active_scene(&mut ili9341_lcd);
 
-
-    let state = stm_graphics::State { pressure: 12.0, temperature: 35.0, datetime: DateTime { date: Date { day: 12, month: 8, year: 2021 }, time: Time::new(22, 35) }, battery: 0xFF };
+    let state = stm_graphics::State {
+        pressure: 12.0,
+        temperature: 35.0,
+        datetime: DateTime {
+            date: Date {
+                day: 12,
+                month: 8,
+                year: 2021,
+            },
+            time: Time::new(22, 35),
+        },
+        battery: 0xFF,
+    };
 
     loop {
         // let state = crate::STATE.lock().await;
         let mut refresh = LCD_REFRESH.load(Ordering::Relaxed);
         let next_pressed = LCD_NEXT_ITEM.load(Ordering::Relaxed);
         if next_pressed {
-            scene_manager.get_active_scene().unwrap().select_next_toggleable();
+            scene_manager
+                .get_active_scene()
+                .unwrap()
+                .select_next_toggleable();
             LCD_NEXT_ITEM.store(false, Ordering::Relaxed);
             refresh = true;
         }
 
         let enter_pressed = LCD_ENTER_ITEM.load(Ordering::Relaxed);
         if enter_pressed {
-            scene_manager.get_active_scene().unwrap().click_currently_toggled();
+            scene_manager
+                .get_active_scene()
+                .unwrap()
+                .click_currently_toggled();
             LCD_ENTER_ITEM.store(false, Ordering::Relaxed);
             refresh = true;
         }
@@ -445,9 +469,14 @@ pub async fn screen_task(
         }
         lastrun = Instant::now().as_millis();
         Timer::after_millis(33).await;
-        if(LOW_POWER_MODE.load(Ordering::Relaxed) == true){
+        if (LOW_POWER_MODE.load(Ordering::Relaxed) == true) {
             info!("[Display] Low power mode");
-            return;
+            break;
         }
     }
+
+    let driver = ili9341_lcd.get_device();
+    mem::drop(driver);
+
+    info!("[Display] Exiting");
 }

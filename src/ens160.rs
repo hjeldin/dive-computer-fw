@@ -57,7 +57,7 @@ impl<'a> ENS160<'a> {
             let mut id: u16 = 0;
             let mut buffer: [u8; 2] = [0; 2];
             self.driver
-                .write_read(&[ens160regs::PARTID], &mut buffer)
+                .write_read_bytes(&[ens160regs::PARTID], &mut buffer)
                 .await;
             id = buffer[0] as u16 | (buffer[1] as u16) << 8;
 
@@ -80,7 +80,7 @@ impl<'a> ENS160<'a> {
     pub async fn get_status(&mut self) -> [u8; 8] {
         let mut buffer: [u8; 8] = [0; 8];
         self.driver
-            .write_read(&[ens160regs::STATUS], &mut buffer)
+            .write_read_bytes(&[ens160regs::STATUS], &mut buffer)
             .await;
 
         defmt::info!("[ENS160] Status = {}", buffer);
@@ -92,7 +92,7 @@ impl<'a> ENS160<'a> {
         let mut voc: u16 = 0;
         let mut buffer: [u8; 2] = [0; 2];
         self.driver
-            .write_read(&[ens160regs::DATA_TVOC], &mut buffer)
+            .write_read_bytes(&[ens160regs::DATA_TVOC], &mut buffer)
             .await;
         voc = buffer[0] as u16 | (buffer[1] as u16) << 8;
         voc
@@ -102,7 +102,7 @@ impl<'a> ENS160<'a> {
         let mut voc: u16 = 0;
         let mut buffer: [u8; 2] = [0; 2];
         self.driver
-            .write_read(&[ens160regs::DATA_ECO2], &mut buffer)
+            .write_read_bytes(&[ens160regs::DATA_ECO2], &mut buffer)
             .await;
         voc = buffer[0] as u16 | (buffer[1] as u16) << 8;
         voc
@@ -111,7 +111,7 @@ impl<'a> ENS160<'a> {
     pub async fn get_aqi(&mut self) -> u8 {
         let mut buffer: [u8; 1] = [0; 1];
         self.driver
-            .write_read(&[ens160regs::DATA_AQI], &mut buffer)
+            .write_read_bytes(&[ens160regs::DATA_AQI], &mut buffer)
             .await;
         buffer[0]
     }
@@ -133,7 +133,7 @@ pub async fn ens_task(sensor: I2CDriver<'static>) {
         sensor.get_eco2().await;
         sensor.get_aqi().await;
         Timer::after_millis(1000).await;
-        if(LOW_POWER_MODE.load(Ordering::Relaxed) == true){
+        if (LOW_POWER_MODE.load(Ordering::Relaxed) == true) {
             info!("[ENS160] Low power mode");
             return;
         }

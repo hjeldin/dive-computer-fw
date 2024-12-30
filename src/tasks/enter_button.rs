@@ -1,8 +1,9 @@
+use crate::{INTERACTION, LCD_ENTER_ITEM, LOW_POWER_MODE, TRIGGER_BUZZ};
+use core::mem;
 use core::sync::atomic::Ordering;
 use defmt::info;
 use embassy_stm32::exti::ExtiInput;
 use embassy_time::Timer;
-use crate::{INTERACTION, LCD_ENTER_ITEM, LOW_POWER_MODE, TRIGGER_BUZZ};
 
 #[embassy_executor::task]
 pub async fn btn_enter_task(mut input: ExtiInput<'static>) {
@@ -14,9 +15,11 @@ pub async fn btn_enter_task(mut input: ExtiInput<'static>) {
         TRIGGER_BUZZ.store(1000, Ordering::Relaxed);
         Timer::after_millis(100).await;
 
-        if(LOW_POWER_MODE.load(Ordering::Relaxed) == true){
+        if (LOW_POWER_MODE.load(Ordering::Relaxed) == true) {
             info!("[EnterButtonTask] Low power mode");
-            return;
+            break;
         }
     }
+
+    mem::drop(input);
 }

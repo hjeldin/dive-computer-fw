@@ -2,10 +2,45 @@ use core::borrow::Borrow;
 
 use embassy_stm32::{i2c::I2c, mode::Async};
 use embassy_sync::{blocking_mutex::raw::ThreadModeRawMutex, mutex::Mutex};
+use embedded_hal_async::i2c::ErrorType;
 
 pub struct I2CDriver<'a> {
     i2c: &'a Mutex<ThreadModeRawMutex, I2c<'static, Async>>,
     device_address: u8,
+}
+
+impl ErrorType for I2CDriver<'_> {
+    type Error = embassy_stm32::i2c::Error;
+}
+
+impl embedded_hal_async::i2c::I2c<u8> for I2CDriver<'_> {
+    async fn transaction(
+        &mut self,
+        _: u8,
+        _: &mut [embedded_hal_async::i2c::Operation<'_>],
+    ) -> Result<(), <Self as embedded_hal_async::i2c::ErrorType>::Error> {
+        Ok(())
+    }
+
+    async fn read(&mut self, address: u8, read: &mut [u8]) -> Result<(), Self::Error> {
+        self.read_byte().await.unwrap();
+        Ok(())
+    }
+
+    async fn write(&mut self, address: u8, write: &[u8]) -> Result<(), Self::Error> {
+        self.write_bytes(write).await.unwrap();
+        Ok(())
+    }
+
+    async fn write_read(&mut self, address: u8, write: &[u8], read: &mut [u8]) -> Result<(), Self::Error> {
+        let res = self.write_read_bytes(write, read).await;
+        if res.is_err() {
+            defmt::error!("Error reading/writing from I2C device {:x}", address);
+            return Err(Self::Error::Timeout);
+        }
+        Ok(())
+    }
+
 }
 
 impl<'a> I2CDriver<'a> {
@@ -44,7 +79,7 @@ impl<'a> I2CDriver<'a> {
         }
     }
 
-    pub async fn write_read(
+    pub async fn write_read_bytes(
         &self,
         register: &[u8],
         buffer: &'a mut [u8],

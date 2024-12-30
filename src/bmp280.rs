@@ -140,7 +140,7 @@ impl<'a> BMP280<'a> {
         loop {
             let mut id: u16 = 0;
             let mut buffer: [u8; 1] = [0; 1];
-            self.driver.write_read(&[bmp280regs::ID], &mut buffer).await;
+            self.driver.write_read_bytes(&[bmp280regs::ID], &mut buffer).await;
 
             id = buffer[0] as u16;
 
@@ -158,7 +158,7 @@ impl<'a> BMP280<'a> {
         let mut buffer: [u8; 8] = [0; 8];
         let result = self
             .driver
-            .write_read(&[bmp280regs::STATUS], &mut buffer)
+            .write_read_bytes(&[bmp280regs::STATUS], &mut buffer)
             .await;
         defmt::info!("[BMP280] Status = {}", buffer);
     }
@@ -170,15 +170,15 @@ impl<'a> BMP280<'a> {
 
         let result_msb = self
             .driver
-            .write_read(&[bmp280regs::PRESSMSB], &mut buffer_msb)
+            .write_read_bytes(&[bmp280regs::PRESSMSB], &mut buffer_msb)
             .await;
         let result_lsb = self
             .driver
-            .write_read(&[bmp280regs::PRESSLSB], &mut buffer_lsb)
+            .write_read_bytes(&[bmp280regs::PRESSLSB], &mut buffer_lsb)
             .await;
         let result_xlsb = self
             .driver
-            .write_read(&[bmp280regs::PRESSXLSB], &mut buffer_xlsb)
+            .write_read_bytes(&[bmp280regs::PRESSXLSB], &mut buffer_xlsb)
             .await;
 
         let value: i32 =
@@ -196,15 +196,15 @@ impl<'a> BMP280<'a> {
 
         let result_msb = self
             .driver
-            .write_read(&[bmp280regs::TEMPMSB], &mut buffer_msb)
+            .write_read_bytes(&[bmp280regs::TEMPMSB], &mut buffer_msb)
             .await;
         let result_lsb = self
             .driver
-            .write_read(&[bmp280regs::TEMPLSB], &mut buffer_lsb)
+            .write_read_bytes(&[bmp280regs::TEMPLSB], &mut buffer_lsb)
             .await;
         let result_xlsb = self
             .driver
-            .write_read(&[bmp280regs::TEMPXLSB], &mut buffer_xlsb)
+            .write_read_bytes(&[bmp280regs::TEMPXLSB], &mut buffer_xlsb)
             .await;
 
         let value: i32 =
@@ -222,11 +222,11 @@ impl<'a> BMP280<'a> {
 
         let result_msb = self
             .driver
-            .write_read(&[bmp280regs::HUMMSB], &mut buffer_msb)
+            .write_read_bytes(&[bmp280regs::HUMMSB], &mut buffer_msb)
             .await;
         let result_lsb = self
             .driver
-            .write_read(&[bmp280regs::HUMLSB], &mut buffer_lsb)
+            .write_read_bytes(&[bmp280regs::HUMLSB], &mut buffer_lsb)
             .await;
 
         let value: i32 = (buffer_msb[0] as i32) << 8 | (buffer_lsb[0] as i32) << 0;
@@ -275,15 +275,15 @@ impl<'a> BMP280<'a> {
                 let mut dig_t31_buff: [u8; 2] = [0; 2];
 
                 self.driver
-                    .write_read(&[bmp280regs::CALIB_T11], &mut dig_t11_buff)
+                    .write_read_bytes(&[bmp280regs::CALIB_T11], &mut dig_t11_buff)
                     .await;
 
                 self.driver
-                    .write_read(&[bmp280regs::CALIB_T21], &mut dig_t21_buff)
+                    .write_read_bytes(&[bmp280regs::CALIB_T21], &mut dig_t21_buff)
                     .await;
 
                 self.driver
-                    .write_read(&[bmp280regs::CALIB_T31], &mut dig_t31_buff)
+                    .write_read_bytes(&[bmp280regs::CALIB_T31], &mut dig_t31_buff)
                     .await;
 
                 let tmp_t1 = (dig_t11_buff[0] as u16) << 8 | (dig_t11_buff[1] as u16);
@@ -327,7 +327,7 @@ pub async fn bmp_task(sensor: I2CDriver<'static>) {
         bmp280_sensor.get_temp().await;
         // bmp280_sensor.get_hum().await;
         Timer::after_millis(1000).await;
-        if(LOW_POWER_MODE.load(Ordering::Relaxed) == true){
+        if (LOW_POWER_MODE.load(Ordering::Relaxed) == true) {
             info!("[BMP280] Low power mode");
             return;
         }

@@ -20,7 +20,14 @@ pub async fn deco_task() {
             amb_pressure += 0.1;
         }
         let result = run_deco_loop(&mut tissues, amb_pressure, temperature, 1.0 / 60.0);
-        defmt::info!("{:?}", result);
+        match result { 
+            Ok(_) => {
+                info!("[DECO] Success");
+            },
+            Err(e) => {
+                info!("[DECO] Error {:?}", e);
+            }
+        }
         defmt::info!("pressure {:?}", amb_pressure);
         Timer::after_millis(1000).await;
         if (LOW_POWER_MODE.load(Ordering::Relaxed) == true) {

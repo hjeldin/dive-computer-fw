@@ -318,13 +318,9 @@ pub async fn ms5837_task(sensor: I2CDriver<'static>) {
             .await;
         defmt::info!("Pressure: {} Temperature: {}", result.0, result.1);
         info!("Altitude: {}, Depth: {}", ms5837_sensor.altitude().await, ms5837_sensor.depth(1.0).await);
-        // let result = ms5837_sensor.read_temperature(ms5837regs::Resolution::Osr256).await;
-        // let normalised = ms5837_sensor.normalise_temperature(result);
-        // defmt::info!("Pressure: {} Temperature: {}", result, normalised);
-        //
-        // let mut state = crate::STATE.lock().await;
-        // state.pressure = result.0;
-        // state.temperature = result.1;
+        
+        // todo: check ascent speed
+        
         Timer::after_millis(1000).await;
         if (LOW_POWER_MODE.load(Ordering::Relaxed) == true) {
             info!("[MS5837] Low power mode");

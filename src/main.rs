@@ -1,6 +1,7 @@
 #![no_main]
 #![no_std]
 
+use core::arch::asm;
 use crate::i2cdriver::I2CDriver;
 use crate::tasks::buzzer::buzzer_pwm_task;
 use crate::tasks::enter_button::btn_enter_task;

@@ -409,9 +409,9 @@ pub async fn screen_task(
     ili9341_lcd.init().await;
     defmt::info!("ILI9341 init done");
 
-    let mut scene_manager = scene_manager::SceneManager::new();
-    // let mut scene_manager = scene_manager::SceneManager::instance().lock().await;
+    let mut scene_manager = unsafe { &mut scene_manager::INSTANCE };
     scene_manager.add_scene(stm_graphics::startup::build_startup());
+    scene_manager.add_scene(stm_graphics::dive::build_dive());
 
     let mut status_bar = stm_graphics::StatusBar::new(22, 32);
     let mut battery_indicator = stm_graphics::battery::BatteryIndicator::new(0xAA);

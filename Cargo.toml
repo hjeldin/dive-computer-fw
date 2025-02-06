@@ -4,6 +4,7 @@ edition = "2018"
 readme = "README.md"
 name = "stm-blink"
 version = "0.1.0"
+resolver = "2"
 
 [dependencies]
 embassy-stm32 = { path = "../embassy/embassy-stm32", features = ["defmt", "memory-x", "chrono", "stm32l476rg", "time-driver-any", "unstable-pac", "exti", "low-power" ] }

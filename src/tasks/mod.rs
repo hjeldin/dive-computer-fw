@@ -5,3 +5,5 @@ pub mod next_button;
 pub mod ninedof;
 pub mod no_interaction;
 pub mod threedof;
+pub mod usb_device;
+pub mod sd_card;

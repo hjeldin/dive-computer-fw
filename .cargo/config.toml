@@ -7,12 +7,12 @@ DEFMT_LOG = "info"
 # runner = "arm-none-eabi-gdb -q -x openocd.gdb"
 # runner = "gdb-multiarch -q -x openocd.gdb"
 linker = "/nix/store/7a68ln55fidyfdwl0prih95z1gdyqp3s-flip-link-0.1.10/bin/flip-link"
-runner = "/nix/store/rqvhcmix4304xjbbq7yfm88qipbzfj9h-probe-rs-tools-0.25.0/bin/probe-rs run --chip STM32L476RGTx --connect-under-reset"
+runner = "/nix/store/rqvhcmix4304xjbbq7yfm88qipbzfj9h-probe-rs-tools-0.25.0/bin/probe-rs run --chip STM32L476RGTx"
 # runner = "gdb -q -x openocd.gdb"
 
 rustflags = [
   # Previously, the linker arguments --nmagic and -Tlink.x were set here.
-  # They are now set by build.rs instead. The linker argument can still
+  # They are now set by build.rs instead. The linker argument can stillq
   # only be set here, if a custom linker is needed.
 
   # By default, the LLD linker is used, which is shipped with the Rust

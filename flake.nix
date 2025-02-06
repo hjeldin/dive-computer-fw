@@ -53,10 +53,12 @@
             flip-link
             probe-rs-tools
             usbutils
+            gcc-arm-embedded
 
             openocd
 
             gdb
+            gef
 
             # Rust Embedded
             (rust-bin.stable.latest.default.override {

@@ -34,11 +34,11 @@ pub async fn lcd_brightness_task(
         embassy_stm32::timer::low_level::CountingMode::EdgeAlignedUp,
     );
     let max_duty = pwm.max_duty_cycle();
-    let mut del_var = max_duty / 2;
+    let mut del_var = max_duty / 5;
     defmt::info!("Brightness max duty: {}", max_duty);
     LCD_MAX_DUTY_CYCLE.store(max_duty, Ordering::Relaxed);
     let pwm_channel = embassy_stm32::timer::Channel::Ch3;
-    pwm.channel(pwm_channel).set_duty_cycle(max_duty / 5);
+    pwm.channel(pwm_channel).set_duty_cycle(max_duty / 12);
     pwm.channel(pwm_channel).enable();
     loop {
         button.wait_for_rising_edge().await;

@@ -11,26 +11,35 @@ use crate::tasks::ninedof::ninedof_task;
 use crate::tasks::no_interaction::no_interaction_task;
 use core::mem;
 use core::sync::atomic::{AtomicBool, AtomicU16, Ordering};
-use defmt::{info, unwrap};
+use defmt::{info, unwrap, Debug2Format};
 use embassy_executor::Spawner;
 use embassy_stm32::exti::ExtiInput;
-use embassy_stm32::gpio::{Level, Output, Pull, Speed};
+use embassy_stm32::gpio::{Input, Level, Output, Pull, Speed};
 use embassy_stm32::i2c::{self, I2c};
 use embassy_stm32::low_power::Executor;
 use embassy_stm32::mode::Async;
 use embassy_stm32::pac::ADC1;
-use embassy_stm32::peripherals::{DMA1_CH1, DMA1_CH3, RCC};
+use embassy_stm32::peripherals::{DMA1_CH1, DMA1_CH3, DMA2_CH4, RCC};
 use embassy_stm32::rcc::disable;
 use embassy_stm32::rtc::{DateTime, DayOfWeek, Rtc, RtcConfig};
 use embassy_stm32::spi::{self, Spi};
 use embassy_stm32::time::Hertz;
-use embassy_stm32::{bind_interrupts, peripherals};
+use embassy_stm32::{bind_interrupts, peripherals, sdmmc, usb};
 use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex;
 use embassy_sync::mutex::Mutex;
 use embassy_time::Timer;
 use static_cell::StaticCell;
 use {defmt_rtt as _, panic_probe as _};
-use crate::tasks::threedof::threedof_task;
+use embassy_stm32::flash::{Flash, WRITE_SIZE};
+
+use embassy_futures::join::join;
+use embassy_stm32::sdmmc::{DataBlock, Sdmmc};
+use crate::tasks::sd_card::sd_card_task;
+use crate::tasks::usb_device::usb_device_task;
+// use embassy_boot_stm32::{AlignedBuffer, BlockingFirmwareState, FirmwareUpdaterConfig};
+// use embassy_usb_dfu::consts::DfuAttributes;
+// use embassy_usb_dfu::{usb_dfu, Control, ResetImmediate};
+
 
 mod bmp280;
 mod decotask;
@@ -55,6 +64,8 @@ static RTC: StaticCell<Rtc> = StaticCell::new();
 bind_interrupts!(struct Irqs {
     I2C1_EV => i2c::EventInterruptHandler<peripherals::I2C1>;
     I2C1_ER => i2c::ErrorInterruptHandler<peripherals::I2C1>;
+    OTG_FS => usb::InterruptHandler<peripherals::USB_OTG_FS>;
+    SDMMC1 => sdmmc::InterruptHandler<peripherals::SDMMC1>;
 });
 
 pub static STATE: Mutex<ThreadModeRawMutex, state::State> = Mutex::new(state::State {
@@ -83,18 +94,34 @@ async fn async_main(spawner: Spawner) {
     let mut defaults = embassy_stm32::Config::default();
     // set the internal clock to run at max (80MHz)
     defaults.rcc.hsi = true;
+    defaults.rcc.hse = Some(embassy_stm32::rcc::Hse {
+        freq: Hertz(8_000_000),
+        mode: embassy_stm32::rcc::HseMode::Oscillator,
+    });
     defaults.rcc.pll = Some(embassy_stm32::rcc::Pll {
-        source: embassy_stm32::rcc::PllSource::HSI,
+        source: embassy_stm32::rcc::PllSource::HSE,
         mul: embassy_stm32::rcc::PllMul::MUL10,
         divp: Some(embassy_stm32::rcc::PllPDiv::DIV7),
         divq: Some(embassy_stm32::rcc::PllQDiv::DIV2),
         divr: Some(embassy_stm32::rcc::PllRDiv::DIV2),
         prediv: embassy_stm32::rcc::PllPreDiv::DIV1,
     });
+    // USB
+    defaults.rcc.pllsai1 = Some(embassy_stm32::rcc::Pll {
+        source: embassy_stm32::rcc::PllSource::HSE,
+        prediv: embassy_stm32::rcc::PllPreDiv::DIV1,
+        mul: embassy_stm32::rcc::PllMul::MUL12,
+        divp: None,
+        divq: Some(embassy_stm32::rcc::PllQDiv::DIV2),
+        divr: None,
+    });
+    defaults.rcc.mux.clk48sel = embassy_stm32::rcc::mux::Clk48sel::PLLSAI1_Q;
     defaults.rcc.sys = embassy_stm32::rcc::Sysclk::PLL1_R;
     defaults.rcc.ahb_pre = embassy_stm32::rcc::AHBPrescaler::DIV2;
     defaults.rcc.apb1_pre = embassy_stm32::rcc::APBPrescaler::DIV1;
     defaults.rcc.apb2_pre = embassy_stm32::rcc::APBPrescaler::DIV1;
+
+
 
     // defaults.rcc.pll = Some(embassy_stm32::rcc::Pll {
     //     source: embassy_stm32::rcc::PllSource::HSI,
@@ -185,10 +212,10 @@ async fn async_main(spawner: Spawner) {
         SHARED_DMA1_CH3.init(Mutex::new(p.DMA1_CH3));
     let static_dma1_ch1: &mut Mutex<ThreadModeRawMutex, DMA1_CH1> =
         SHARED_DMA1_CH1.init(Mutex::new(p.DMA1_CH1));
-    //
-    //
-    // // spawner.spawn(ens160::ens_task(ens160_driver)).unwrap();
-    // // spawner.spawn(bmp280::bmp_task(bmp280_driver)).unwrap();
+
+
+    // spawner.spawn(ens160::ens_task(ens160_driver)).unwrap();
+    // spawner.spawn(bmp280::bmp_task(bmp280_driver)).unwrap();
     spawner.spawn(ms5837::ms5837_task(ms5837_driver)).unwrap();
     spawner
         .spawn(ili9341::screen_task(spi, static_dc, static_rst))
@@ -204,6 +231,9 @@ async fn async_main(spawner: Spawner) {
         .unwrap();
     // spawner.spawn(no_interaction_task()).unwrap();
 
+    spawner.spawn(usb_device_task(p.USB_OTG_FS, p.PA12, p.PA11, spawner)).unwrap();
+    spawner.spawn(sd_card_task(p.SDMMC1, p.DMA2_CH4, p.PC12, p.PD2, p.PC8, p.PC9, p.PC10, p.PC11)).unwrap();
+
     let ninedof_i2c = I2CDriver::new(static_i2c, 0x6b);
     let threedof_i2c = I2CDriver::new(static_i2c, 0x30);
     // spawner.spawn(ninedof_task(ninedof_i2c)).unwrap();
@@ -211,7 +241,34 @@ async fn async_main(spawner: Spawner) {
 
     cs.set_low();
 
+    // get input pin PB10, PB11, PB12
+    let mut low_batt = Input::new(p.PB10, Pull::Up);
+    let mut power_good = Input::new(p.PB11, Pull::Up);
+    let mut charge_status = Input::new(p.PB12, Pull::Up);
+
     loop {
+        // print low battery status
+        if low_batt.is_low() {
+            info!("Low battery");
+        } else {
+            info!("Battery OK");
+        }
+
+        // print power good status
+        if power_good.is_low() {
+            info!("Power good");
+        } else {
+            info!("Power not good");
+        }
+
+        // print charge status
+        if charge_status.is_low() {
+            info!("Charging");
+        } else {
+            info!("Not charging");
+        }
+
         Timer::after_millis(1000).await;
     }
 }
+

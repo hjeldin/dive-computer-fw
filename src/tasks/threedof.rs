@@ -13,11 +13,12 @@ pub async fn threedof_task(mut driver: I2CDriver<'static>) {
 
     loop {
         Timer::after_millis(1000).await;
-        unsafe {
-            let data = threedof_sensor.read_raw_measurement_18().await.unwrap();
-            defmt::info!("HEADING: {}", calculate_heading(data.x, data.y, data.z));
-        }
-        defmt::info!("TEMP: {}", threedof_sensor.get_temp_c().await.unwrap());
+        defmt::info!("WTF");
+        // unsafe {
+        //     let data = threedof_sensor.read_raw_measurement_18().await.unwrap();
+        //     defmt::info!("HEADING: {}", calculate_heading(data.x, data.y, data.z));
+        // }
+        // defmt::info!("TEMP: {}", threedof_sensor.get_temp_c().await.unwrap());
     }
 }
 

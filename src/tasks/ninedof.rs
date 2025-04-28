@@ -10,8 +10,10 @@ pub async fn ninedof_task(mut driver: I2CDriver<'static>) {
     loop {
         Timer::after_millis(1000).await;
         {
-            let data = sixdof_sensor.get_accelerometer(&mut driver).await.unwrap();
-            defmt::info!("{}", data);
+            let accel_data = sixdof_sensor.get_accelerometer(&mut driver).await.unwrap();
+            let gyro_data = sixdof_sensor.get_gyroscope(&mut driver).await.unwrap();
+            defmt::info!("{}", accel_data.as_g());
+            defmt::info!("{}", gyro_data.as_rad());
         }
     }
 }

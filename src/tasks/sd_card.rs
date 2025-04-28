@@ -1,114 +1,141 @@
 use chrono::NaiveDateTime;
+use chrono::SecondsFormat::Millis;
 use defmt::{info, unwrap, Debug2Format};
-use embassy_stm32::peripherals::{DMA2_CH4, SDMMC1, PC10, PC11, PC12, PC8, PC9, PD2};
+use embassy_stm32::{bind_interrupts, peripherals, sdmmc};
+use embassy_stm32::peripherals::{DMA2_CH4, SDMMC1, PC10, PC11, PC12, PC8, PC9, PD2, DMA2_CH5};
 use embassy_stm32::sdmmc::{DataBlock, Sdmmc};
 use embassy_stm32::time::Hertz;
-use embassy_time::Timer;
-use crate::Irqs;
-// use fatfs_embedded;
-// use fatfs_embedded::fatfs::diskio::{DiskResult, IoctlCommand};
-//
-// struct SDDriver {
-//
-// }
-//
-// impl fatfs_embedded::fatfs::diskio::FatFsDriver for SDDriver {
-//     fn disk_status(&self, drive: u8) -> u8 {
-//         todo!()
-//     }
-//
-//     fn disk_initialize(&mut self, drive: u8) -> u8 {
-//         todo!()
-//     }
-//
-//     fn disk_read(&mut self, drive: u8, buffer: &mut [u8], sector: u32) -> DiskResult {
-//         todo!()
-//     }
-//
-//     fn disk_write(&mut self, drive: u8, buffer: &[u8], sector: u32) -> DiskResult {
-//         todo!()
-//     }
-//
-//     fn disk_ioctl(&self, data: &mut IoctlCommand) -> DiskResult {
-//         todo!()
-//     }
-//
-//     fn get_fattime(&self) -> NaiveDateTime {
-//         todo!()
-//     }
-// }
+use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex;
+use embassy_sync::mutex::Mutex;
+use embassy_time::{Duration, Timer, WithTimeout};
+use embedded_sdmmc::asynchronous::{Block, BlockCount, BlockDevice, BlockIdx, Mode, SdCard, VolumeIdx, VolumeManager};
+use crate::state;
 
-#[embassy_executor::task]
-pub async fn sd_card_task(sdmmc: SDMMC1, dma2_ch4: DMA2_CH4, pc12: PC12, pd2: PD2, pc8: PC8, pc9: PC9, pc10: PC10, pc11: PC11) {
-    let mut sdmmc = Sdmmc::new_4bit(
-        sdmmc,
-        Irqs,
-        dma2_ch4,
-        pc12,
-        pd2,
-        pc8,
-        pc9,
-        pc10,
-        pc11,
-        Default::default(),
-    );
+pub struct TimeSource;
 
-    // Should print 400kHz for initialization
-    info!("Configured clock: {}", sdmmc.clock().0);
-
-    let mut err = None;
-    loop {
-        match sdmmc.init_card(Hertz(48_000_000)).await {
-            Ok(_) => {
-                info!("Card initialized");
-                break;
-            },
-            Err(e) => {
-                // if err != Some(e) {
-                    info!("waiting for card error, retrying: {:?}", e);
-                    err = Some(e);
-                // }
-            }
+impl embedded_sdmmc::asynchronous::TimeSource for TimeSource {
+    fn get_timestamp(&self) -> embedded_sdmmc::asynchronous::Timestamp {
+        embedded_sdmmc::asynchronous::Timestamp {
+            year_since_1970: 0,
+            zero_indexed_month: 0,
+            zero_indexed_day: 0,
+            hours: 0,
+            minutes: 0,
+            seconds: 0,
         }
-        Timer::after_millis(100).await;
+    }
+}
+
+struct SDMMCDevice<'a> {
+    sdmmc: &'a Mutex<ThreadModeRawMutex, Sdmmc<'a, SDMMC1, DMA2_CH4>>
+}
+
+impl<'a> SDMMCDevice<'a> {
+    fn new(sdmmc: &'a Mutex<ThreadModeRawMutex, Sdmmc<'a, SDMMC1, DMA2_CH4>>) -> Self {
+        Self { sdmmc }
     }
 
-    let card = unwrap!(sdmmc.card());
+    async fn init(&mut self) {
+        // Initialize the SDMMC device
+        // This is where you would set up the device, if needed
 
-    info!("Card: {:#?}", Debug2Format(card));
-    info!("Clock: {}", sdmmc.clock());
+        // Should print 400kHz for initialization
+        let mut sdmmc = self.sdmmc.lock().await;
+        info!("Configured clock: {}", sdmmc.clock().0);
 
-    // Arbitrary block index
-    let block_idx = 16;
+        let mut err = None;
 
-    // SDMMC uses `DataBlock` instead of `&[u8]` to ensure 4 byte alignment required by the hardware.
-    let mut block = DataBlock([0u8; 512]);
+        loop {
+            match sdmmc.init_card(Hertz(24_000_000)).await {
+                Ok(_) => {
+                    info!("Card initialized");
+                    break;
+                },
+                Err(e) => {
+                    info!("waiting for card error, retrying: {:?}", e);
+                    err = Some(e);
+                }
+            }
+            Timer::after(Duration::from_millis(1000)).await;
+        }
 
-    sdmmc.read_block(block_idx, &mut block).await.unwrap();
-    info!("Read: {=[u8]:X}...{=[u8]:X}", block[..8], block[512 - 8..]);
+        let card = unwrap!(sdmmc.card());
 
-    // if !ALLOW_WRITES {
-    //     info!("Writing is disabled.");
-    //     loop {}
-    // }
+        info!("Card: {:#?}", Debug2Format(card));
+        info!("Clock: {}", sdmmc.clock());
+    }
+}
 
-    info!("Filling block with 0x55");
-    block.fill(0x55);
-    sdmmc.write_block(block_idx, &block).await.unwrap();
-    info!("Write done");
+impl<'a> BlockDevice for SDMMCDevice<'a> {
+    type Error = ();
 
-    sdmmc.read_block(block_idx, &mut block).await.unwrap();
-    info!("Read: {=[u8]:X}...{=[u8]:X}", block[..8], block[512 - 8..]);
+    async fn read(&self, blocks: &mut [Block], start_block_idx: BlockIdx) -> Result<(), Self::Error> {
+        // Read blocks from the SD card
+        let mut sdmmc = critical_section::with(|cs| {
+            self.sdmmc.try_lock().unwrap()
+        });
+        Ok(for (i, block) in blocks.iter_mut().enumerate() {
+            let block_idx = start_block_idx.0 + i as u32;
+            let mut datablock = DataBlock([0u8; 512]);
+            sdmmc.read_block(block_idx, &mut datablock).with_timeout(Duration::from_millis(100)).await.unwrap().expect("TODO: panic message");
+            block.contents = datablock.0;
+        })
+    }
 
-    info!("Filling block with 0xAA");
-    block.fill(0xAA);
-    sdmmc.write_block(block_idx, &block).await.unwrap();
-    info!("Write done");
+    async fn write(&self, blocks: &[Block], start_block_idx: BlockIdx) -> Result<(), Self::Error> {
+        let mut sdmmc = critical_section::with(|cs| {
+            self.sdmmc.try_lock().unwrap()
+        });
+        Ok(for (i, block) in blocks.iter().enumerate() {
+            let block_idx = start_block_idx.0 + i as u32;
+            let mut datablock = DataBlock([0u8; 512]);
+            datablock.0.copy_from_slice(&block.contents);
+            sdmmc.write_block(block_idx, &datablock).await.unwrap();
+        })
+    }
 
-    sdmmc.read_block(block_idx, &mut block).await.unwrap();
-    info!("Read: {=[u8]:X}...{=[u8]:X}", block[..8], block[512 - 8..]);
+    async fn num_blocks(&self) -> Result<BlockCount, Self::Error> {
+        // Return the number of blocks on the SD card
+        let mut sdmmc = critical_section::with(|cs| {
+            self.sdmmc.try_lock().unwrap()
+        });
+        let card = sdmmc.card().unwrap();
+        Ok(BlockCount(card.csd.block_count()))
+    }
+}
+
+#[embassy_executor::task]
+pub async fn sd_card_task(sdmmc: &'static Mutex<ThreadModeRawMutex, Sdmmc<'static, SDMMC1, DMA2_CH4>>, state: &'static Mutex<ThreadModeRawMutex, state::State>) {
+    let mut device = SDMMCDevice::new(sdmmc);
+    device.init().await;
+
+    let volume_manager = VolumeManager::new(device, TimeSource);
+
+    let volume0 = volume_manager.open_volume(VolumeIdx(0)).await.unwrap();
+
+    info!("Volume 0: {:#?}", Debug2Format(&volume0));
+
+    let root_dir = volume0.open_root_dir().unwrap();
+    info!("Root dir: {:#?}", Debug2Format(&root_dir));
+
+    let file = root_dir.open_file_in_dir("test.txt", Mode::ReadOnly).await.unwrap();
+
+    while !file.is_eof() {
+        let mut buf = [0u8; 512];
+        let bytes_read = file.read(&mut buf).await.unwrap();
+        info!("Read {} bytes: {:?}", bytes_read, &buf[..bytes_read]);
+    }
+
+    file.close().await.unwrap();
+
+    let mut file = root_dir.open_file_in_dir("test.txt", Mode::ReadWriteCreateOrAppend).await.unwrap();
 
     loop {
         Timer::after_millis(1000).await;
+        let state = state.lock().await;
+        let mut buf = [0u8; 32];
+        let text = format_no_std::show(&mut buf, format_args!("{:.5}\n{:.1}\n", state.pressure, state.temperature)).unwrap();
+        file.write(&text.as_bytes()).await.unwrap();
+        file.flush().await.unwrap();
     }
 }

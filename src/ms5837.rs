@@ -5,7 +5,7 @@ use embassy_time::Timer;
 use static_cell::StaticCell;
 
 use crate::i2cdriver::I2CDriver;
-use crate::LOW_POWER_MODE;
+use crate::{state, LOW_POWER_MODE};
 
 #[allow(dead_code)]
 mod ms5837regs {
@@ -309,16 +309,24 @@ impl<'a> MS5837<'a> {
 }
 
 #[embassy_executor::task]
-pub async fn ms5837_task(sensor: I2CDriver<'static>) {
+pub async fn ms5837_task(sensor: I2CDriver<'static>, state: &'static Mutex<ThreadModeRawMutex, state::State>) {
     let mut ms5837_sensor = MS5837::new(sensor);
     ms5837_sensor.init().await;
     loop {
         let result = ms5837_sensor
             .calculate_temperature_pression(ms5837regs::Resolution::Osr256)
             .await;
-        defmt::info!("Pressure: {} Temperature: {}", result.0, result.1);
-        info!("Altitude: {}, Depth: {}", ms5837_sensor.altitude().await, ms5837_sensor.depth(1.0).await);
-        
+
+
+        let depth = ms5837_sensor.depth(1.0).await;
+        let altitude = ms5837_sensor.altitude().await;
+        // info!("Altitude: {}, Depth: {}", altitude, depth);
+
+        info!("Pressure: {}, Temperature: {}", result.0, result.1);
+
+        let mut state = state.lock().await;
+        state.pressure = result.0;
+        state.temperature = result.1;
         // todo: check ascent speed
         
         Timer::after_millis(1000).await;

@@ -55,6 +55,8 @@
             usbutils
             gcc-arm-embedded
 
+            rustup
+
             openocd
 
             gdb

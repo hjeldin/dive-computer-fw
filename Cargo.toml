@@ -21,8 +21,8 @@ embassy-time = { path = "../embassy/embassy-time", features = ["defmt", "defmt-t
 embassy-usb = { path = "../embassy/embassy-usb", features = ["defmt"] }
 embassy-futures = { path = "../embassy/embassy-futures" }
 embassy-usb-dfu = { path = "../embassy/embassy-usb-dfu", features = ["defmt", "dfu", "cortex-m"] }
-#embassy-boot-stm32 = { path = "../embassy/embassy-boot-stm32", features = ["defmt"] }
-static_cell = "2"
+embassy-boot-stm32 = { path = "../embassy/embassy-boot-stm32", features = ["defmt"] }
+static_cell = { version = "2" }
 portable-atomic = { version = "1.5" }
 panic-probe = { version = "0.3.2", features = ["defmt", "print-defmt"] }
 embedded-hal-async = "1.0.0"
@@ -36,7 +36,9 @@ log = "0.4.22"
 ism330dhcx = { git = "https://github.com/hjeldin/async-ism330dhcx.git" }
 mmc5983ma = { git = "https://github.com/John2143/mmc5983ma.git" , features = ["float", "defmt"]}
 libm = "0.2.11"
-#fatfs-embedded = "0.1.0"
+embedded-sdmmc = { git = "https://github.com/Be-ing/embedded-sdmmc-rs.git", rev = "835b2e4f9d3482b6287f674d7ecf6ae5d0618c18" }
+critical-section = { version = "1.1.0" }
+format_no_std = "1.2.0"
 
 
 [patch.crates-io]

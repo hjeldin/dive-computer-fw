@@ -1,9 +1,10 @@
+use core::ops::Deref;
+use embassy_stm32::peripherals::SDMMC1;
 use chrono::NaiveDateTime;
 use chrono::SecondsFormat::Millis;
 use defmt::{info, unwrap, Debug2Format};
-use embassy_stm32::{bind_interrupts, peripherals, sdmmc};
-use embassy_stm32::peripherals::{DMA2_CH4, SDMMC1, PC10, PC11, PC12, PC8, PC9, PD2, DMA2_CH5};
-use embassy_stm32::sdmmc::{DataBlock, Sdmmc};
+use embassy_stm32::{bind_interrupts, sdmmc};
+use embassy_stm32::sdmmc::{DataBlock, Sdmmc, SdmmcPeripheral};
 use embassy_stm32::time::Hertz;
 use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex;
 use embassy_sync::mutex::Mutex;
@@ -27,11 +28,11 @@ impl embedded_sdmmc::asynchronous::TimeSource for TimeSource {
 }
 
 struct SDMMCDevice<'a> {
-    sdmmc: &'a Mutex<ThreadModeRawMutex, Sdmmc<'a, SDMMC1, DMA2_CH4>>
+    sdmmc: &'a Mutex<ThreadModeRawMutex, Sdmmc<'a, SDMMC1>>
 }
 
 impl<'a> SDMMCDevice<'a> {
-    fn new(sdmmc: &'a Mutex<ThreadModeRawMutex, Sdmmc<'a, SDMMC1, DMA2_CH4>>) -> Self {
+    fn new(sdmmc: &'a Mutex<ThreadModeRawMutex, Sdmmc<'a, SDMMC1>>) -> Self {
         Self { sdmmc }
     }
 
@@ -46,7 +47,7 @@ impl<'a> SDMMCDevice<'a> {
         let mut err = None;
 
         loop {
-            match sdmmc.init_card(Hertz(24_000_000)).await {
+            match sdmmc.init_sd_card(Hertz(24_000_000)).await {
                 Ok(_) => {
                     info!("Card initialized");
                     break;
@@ -99,13 +100,13 @@ impl<'a> BlockDevice for SDMMCDevice<'a> {
         let mut sdmmc = critical_section::with(|cs| {
             self.sdmmc.try_lock().unwrap()
         });
-        let card = sdmmc.card().unwrap();
-        Ok(BlockCount(card.csd.block_count()))
+        // let mut card = sdmmc.card().unwrap().get_sd_card();
+        Ok(BlockCount(512))
     }
 }
 
 #[embassy_executor::task]
-pub async fn sd_card_task(sdmmc: &'static Mutex<ThreadModeRawMutex, Sdmmc<'static, SDMMC1, DMA2_CH4>>, state: &'static Mutex<ThreadModeRawMutex, state::State>) {
+pub async fn sd_card_task(sdmmc: &'static Mutex<ThreadModeRawMutex, Sdmmc<'static, SDMMC1>>, state: &'static Mutex<ThreadModeRawMutex, state::State>) {
     let mut device = SDMMCDevice::new(sdmmc);
     device.init().await;
 

@@ -1,6 +1,7 @@
 use defmt::info;
 use embassy_stm32::adc::Adc;
 use embassy_stm32::gpio::{Input, Output};
+use embassy_stm32::Peri;
 use embassy_stm32::peripherals::{ADC1, PC1};
 use embassy_time::Timer;
 
@@ -10,7 +11,7 @@ pub async fn batt_voltage_monitor_task(low_batt: &'static mut Input<'static>,
                                        charge_status: &'static mut Input<'static>,
                                        adc_bat_v: &'static mut Adc<'static, ADC1>,
                                        bat_mon_en: &'static mut Output<'static>,
-                                       adc_pin: &'static mut PC1,
+                                       adc_pin: &'static mut Peri<'static, PC1>,
     ) {
     let mut vrefint_channel = adc_bat_v.enable_vrefint();
     loop {

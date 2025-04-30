@@ -5,7 +5,7 @@ use core::arch::asm;
 use crate::i2cdriver::I2CDriver;
 // use crate::tasks::buzzer::buzzer_pwm_task;
 use crate::tasks::enter_button::btn_enter_task;
-use crate::tasks::lcd_brightness::lcd_brightness_task;
+// use crate::tasks::lcd_brightness::lcd_brightness_task;
 use crate::tasks::next_button::btn_right_task;
 use crate::tasks::ninedof::ninedof_task;
 use crate::tasks::no_interaction::no_interaction_task;
@@ -16,7 +16,7 @@ use embassy_executor::Spawner;
 use embassy_stm32::exti::ExtiInput;
 use embassy_stm32::gpio::{Input, Level, Output, Pull, Speed};
 use embassy_stm32::i2c::{self, I2c};
-use embassy_stm32::low_power::Executor;
+// use embassy_stm32::low_power::Executor;
 use embassy_stm32::mode::Async;
 use embassy_stm32::pac::ADC1;
 use embassy_stm32::peripherals::{ADC1, DMA1_CH1, DMA1_CH3, DMA2_CH4, PC1, RCC, SDMMC1};
@@ -38,6 +38,7 @@ use embassy_stm32::adc::{Adc, SampleTime};
 use embassy_stm32::sdmmc::{DataBlock, Sdmmc};
 use crate::tasks::batt_voltage_monitor::batt_voltage_monitor_task;
 use crate::tasks::sd_card::sd_card_task;
+use crate::tasks::usb_device::usb_device_task;
 // use crate::tasks::usb_device::usb_device_task;
 // use embassy_boot_stm32::{AlignedBuffer, BlockingFirmwareState, FirmwareUpdaterConfig};
 // use embassy_usb_dfu::consts::DfuAttributes;
@@ -78,16 +79,16 @@ pub static STATE: Mutex<ThreadModeRawMutex, state::State> = Mutex::new(state::St
     temperature: 0.0,
 });
 
-#[cortex_m_rt::entry]
-fn main() -> ! {
-    Executor::take().run(|spawner| {
-        unwrap!(spawner.spawn(async_main(spawner)));
-    });
-
-    loop {
-        cortex_m::asm::wfi();
-    }
-}
+// #[cortex_m_rt::entry]
+// fn main() -> ! {
+//     Executor::take().run(|spawner| {
+//         unwrap!(spawner.spawn(async_main(spawner)));
+//     });
+//
+//     loop {
+//         cortex_m::asm::wfi();
+//     }
+// }
 
 static SHARED_I2C: StaticCell<Mutex<ThreadModeRawMutex, I2c<'static, Async>>> = StaticCell::new();
 static SHARED_SPI: StaticCell<Mutex<ThreadModeRawMutex, Spi<'static, Async>>> = StaticCell::new();
@@ -97,7 +98,7 @@ static SHARED_RST: StaticCell<Mutex<ThreadModeRawMutex, Output<'static>>> = Stat
 static SHARED_DMA1_CH3: StaticCell<Mutex<ThreadModeRawMutex, DMA1_CH3>> = StaticCell::new();
 static SHARED_DMA1_CH1: StaticCell<Mutex<ThreadModeRawMutex, DMA1_CH1>> = StaticCell::new();
 
-static SHARED_SDMMC1: StaticCell<Mutex<ThreadModeRawMutex, Sdmmc<'static, SDMMC1, DMA2_CH4>>> = StaticCell::new();
+static SHARED_SDMMC1: StaticCell<Mutex<ThreadModeRawMutex, Sdmmc<'static, SDMMC1>>> = StaticCell::new();
 
 static LOW_BATT: StaticCell<Input<'static>> = StaticCell::new();
 static POWER_GOOD: StaticCell<Input<'static>> = StaticCell::new();
@@ -106,7 +107,8 @@ static ADC: StaticCell<Adc<ADC1>> = StaticCell::new();
 static BAT_MON_EN: StaticCell<Output<'static>> = StaticCell::new();
 static ADC_PIN: StaticCell<PC1> = StaticCell::new();
 
-#[embassy_executor::task]
+// #[embassy_executor::task]
+#[embassy_executor::main]
 async fn async_main(spawner: Spawner) {
     // Initialize and create handle for devicer peripherals
     let mut defaults = embassy_stm32::Config::default();
@@ -118,7 +120,7 @@ async fn async_main(spawner: Spawner) {
     });
     defaults.rcc.pll = Some(embassy_stm32::rcc::Pll {
         source: embassy_stm32::rcc::PllSource::HSE,
-        mul: embassy_stm32::rcc::PllMul::MUL10,
+        mul: embassy_stm32::rcc::PllMul::MUL20,
         divp: Some(embassy_stm32::rcc::PllPDiv::DIV7),
         divq: Some(embassy_stm32::rcc::PllQDiv::DIV2),
         divr: Some(embassy_stm32::rcc::PllRDiv::DIV2),
@@ -129,16 +131,25 @@ async fn async_main(spawner: Spawner) {
         source: embassy_stm32::rcc::PllSource::HSE,
         prediv: embassy_stm32::rcc::PllPreDiv::DIV1,
         mul: embassy_stm32::rcc::PllMul::MUL12,
-        divp: None,
+        divp: Some(embassy_stm32::rcc::PllPDiv::DIV7),
         divq: Some(embassy_stm32::rcc::PllQDiv::DIV2),
-        divr: None,
+        divr: Some(embassy_stm32::rcc::PllRDiv::DIV2),
+    });
+    defaults.rcc.pllsai2 = Some(embassy_stm32::rcc::Pll {
+        source: embassy_stm32::rcc::PllSource::HSE,
+        prediv: embassy_stm32::rcc::PllPreDiv::DIV1,
+        mul: embassy_stm32::rcc::PllMul::MUL12,
+        divp: Some(embassy_stm32::rcc::PllPDiv::DIV7),
+        divq: None,
+        divr: Some(embassy_stm32::rcc::PllRDiv::DIV2),
     });
     defaults.rcc.mux.clk48sel = embassy_stm32::rcc::mux::Clk48sel::PLLSAI1_Q;
     defaults.rcc.sys = embassy_stm32::rcc::Sysclk::PLL1_R;
-    defaults.rcc.ahb_pre = embassy_stm32::rcc::AHBPrescaler::DIV2;
+    defaults.rcc.ahb_pre = embassy_stm32::rcc::AHBPrescaler::DIV1;
     defaults.rcc.apb1_pre = embassy_stm32::rcc::APBPrescaler::DIV1;
     defaults.rcc.apb2_pre = embassy_stm32::rcc::APBPrescaler::DIV1;
     defaults.rcc.mux.adcsel = embassy_stm32::rcc::mux::Adcsel::SYS;
+    // defaults.rcc.hsi48 = Some(Hsi48Config { sync_from_usb: true }); // needed for USB
 
     // defaults.rcc.pll = Some(embassy_stm32::rcc::Pll {
     //     source: embassy_stm32::rcc::PllSource::HSI,
@@ -159,7 +170,7 @@ async fn async_main(spawner: Spawner) {
 
     // give ownership of rtc peripheral to the executor
     let mut rtc = embassy_stm32::rtc::Rtc::new(p.RTC, RtcConfig::default());
-    let _ = rtc.set_datetime(DateTime::from(2024, 12, 22, DayOfWeek::Sunday, 21, 37, 0).unwrap());
+    let _ = rtc.set_datetime(DateTime::from(2024, 12, 22, DayOfWeek::Sunday, 21, 37, 0, 0).unwrap());
     let mut rtc = RTC.init(rtc);
 
     // embassy_stm32::low_power::stop_with_rtc(rtc);
@@ -243,11 +254,11 @@ async fn async_main(spawner: Spawner) {
     //
     // let static_dma1_ch3: &mut Mutex<ThreadModeRawMutex, DMA1_CH3> =
     //     SHARED_DMA1_CH3.init(Mutex::new(p.DMA1_CH3));
-    let static_dma1_ch1: &mut Mutex<ThreadModeRawMutex, DMA1_CH1> =
-        SHARED_DMA1_CH1.init(Mutex::new(p.DMA1_CH1));
+    // let static_dma1_ch1: &mut Mutex<ThreadModeRawMutex, DMA1_CH1> =
+    //     SHARED_DMA1_CH1.init(Mutex::new(p.DMA1_CH1));
 
 
-    let static_sdmmc1: &mut Mutex<ThreadModeRawMutex, Sdmmc<'static, SDMMC1, DMA2_CH4>> =
+    let static_sdmmc1: &mut Mutex<ThreadModeRawMutex, Sdmmc<'static, SDMMC1>> =
         SHARED_SDMMC1.init(Mutex::new(Sdmmc::new_1bit(
             p.SDMMC1,
             Irqs,
@@ -285,9 +296,11 @@ async fn async_main(spawner: Spawner) {
     //     ))
     //     .unwrap();
     // spawner.spawn(no_interaction_task()).unwrap();
-
-    // spawner.spawn(usb_device_task(p.FLASH, p.USB_OTG_FS, p.PA12, p.PA11, spawner)).unwrap();
-    spawner.spawn(sd_card_task(static_sdmmc1, &STATE)).unwrap();
+    let usb = p.USB_OTG_FS;
+    let pa11 = p.PA11;
+    let pa12 = p.PA12;
+    spawner.spawn(usb_device_task(usb, pa12, pa11)).unwrap();
+    // spawner.spawn(sd_card_task(static_sdmmc1, &STATE)).unwrap();
 
     let ninedof_i2c = I2CDriver::new(
         static_i2c, 0x6b
@@ -307,7 +320,7 @@ async fn async_main(spawner: Spawner) {
     let adc_bat_v: &'static mut _ = ADC.init(Adc::new(p.ADC1));
     adc_bat_v.set_sample_time(SampleTime::CYCLES640_5);
     let bat_mon_en: &'static mut _ = BAT_MON_EN.init(Output::new(p.PC2, Level::High, Speed::VeryHigh));
-    let adc_pin: &'static mut _ = ADC_PIN.init(p.PC1);
+    let adc_pin: &'static mut _ = ADC_PIN.init(*p.PC1);
 
     // spawner.spawn(batt_voltage_monitor_task(
     //     low_batt,

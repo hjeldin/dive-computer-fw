@@ -1,9 +1,9 @@
 use crate::{INTERACTION, LOW_POWER_MODE, RTC, SHARED_I2C};
 use core::mem;
 use core::sync::atomic::Ordering;
-use embassy_stm32::low_power;
-use embassy_stm32::low_power::stop_ready;
-use embassy_stm32::low_power::StopMode::{Stop1, Stop2};
+// use embassy_stm32::low_power;
+// use embassy_stm32::low_power::stop_ready;
+// use embassy_stm32::low_power::StopMode::{Stop1, Stop2};
 use embassy_time::{Instant, Timer};
 
 #[embassy_executor::task]
@@ -22,10 +22,10 @@ pub async fn no_interaction_task() {
             // mem::drop(i2c);
             loop {
                 Timer::after_millis(100).await;
-                if (stop_ready(Stop2)) {
-                    defmt::info!("STOP READY!");
-                    return;
-                }
+                // if (stop_ready(Stop2)) {
+                //     defmt::info!("STOP READY!");
+                //     return;
+                // }
             }
         }
         Timer::after_millis(1000).await;

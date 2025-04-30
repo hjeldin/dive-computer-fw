@@ -7,16 +7,16 @@ version = "0.1.0"
 resolver = "2"
 
 [dependencies]
-embassy-stm32 = { path = "../embassy/embassy-stm32", features = ["defmt", "memory-x", "chrono", "stm32l476rg", "time-driver-any", "unstable-pac", "exti", "low-power" ] }
+embassy-stm32 = { path = "../embassy/embassy-stm32", features = ["defmt", "memory-x", "chrono", "stm32l476rg", "time-driver-any", "unstable-pac", "exti" ] }
 cortex-m = { version = "0.7.7", features = ["critical-section-single-core", "inline-asm"]}
 cortex-m-rt = "0.7.5"
 #cortex-m-semihosting = "0.3.3"
-defmt = "0.3.10"
-defmt-rtt = "0.4.1"
+defmt = "1.0.1"
+defmt-rtt = "1.0.0"
 # stm32f0xx-hal = { version = "0.14.1", features = ["stm32f030x8", "rt"] }
 # ens160 = { version = "0.6", default-features = false }
 embassy-sync = { path = "../embassy/embassy-sync", features = ["defmt"] }
-embassy-executor = { path = "../embassy/embassy-executor", features = ["arch-cortex-m", "executor-thread", "executor-interrupt", "defmt", "task-arena-size-32768"] }
+embassy-executor = { path = "../embassy/embassy-executor", features = ["arch-cortex-m", "executor-thread", "executor-interrupt", "defmt"] }
 embassy-time = { path = "../embassy/embassy-time", features = ["defmt", "defmt-timestamp-uptime", "tick-hz-32_768"] }
 embassy-usb = { path = "../embassy/embassy-usb", features = ["defmt"] }
 embassy-futures = { path = "../embassy/embassy-futures" }
@@ -39,6 +39,7 @@ libm = "0.2.11"
 embedded-sdmmc = { git = "https://github.com/Be-ing/embedded-sdmmc-rs.git", rev = "835b2e4f9d3482b6287f674d7ecf6ae5d0618c18" }
 critical-section = { version = "1.1.0" }
 format_no_std = "1.2.0"
+usbd-hid = "0.8.1"
 
 
 [patch.crates-io]

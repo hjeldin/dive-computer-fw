@@ -31,7 +31,6 @@ use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex;
 use embassy_sync::mutex::Mutex;
 use embassy_time::Timer;
 use static_cell::{StaticCell};
-use tasks::threedof::threedof_task;
 use {defmt_rtt as _, panic_probe as _};
 use embassy_stm32::flash::{Flash, WRITE_SIZE};
 
@@ -95,6 +94,10 @@ pub static STATE: Mutex<ThreadModeRawMutex, state::State> = Mutex::new(state::St
     low_batt: false,
     power_good: false,
     charge_status: false,
+    mag_x: 0.0,
+    mag_y: 0.0,
+    mag_z: 0.0,
+    mag_heading: 0.0,
 });
 
 // #[cortex_m_rt::entry]
@@ -361,14 +364,14 @@ async fn async_main(spawner: Spawner) {
     // )).unwrap();
 
     let ninedof_i2c = I2CDriver::new(
-        static_i2c, 0x6b
+        static_i2c, 
+        0x6b
     );
     let threedof_i2c = I2CDriver::new(
         static_i2c,
         0x30
     );
-    spawner.spawn(ninedof_task(ninedof_i2c, &STATE).expect("Failed to spawn Ninedof task"));
-    spawner.spawn(threedof_task(threedof_i2c).expect("Failed to spawn Threedof task"));
+    spawner.spawn(ninedof_task(ninedof_i2c, threedof_i2c, &STATE).expect("Failed to spawn Ninedof task"));
 
     cs.set_low();
 

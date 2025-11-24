@@ -54,7 +54,7 @@ impl<'a> ENS160<'a> {
     pub async fn init(&mut self) {
         let assigned_id = 0x0160;
         loop {
-            let mut id: u16 = 0;
+            let mut id: u16;
             let mut buffer: [u8; 2] = [0; 2];
             self.driver
                 .write_read_bytes(&[ens160regs::PARTID], &mut buffer)
@@ -89,7 +89,7 @@ impl<'a> ENS160<'a> {
     }
 
     pub async fn get_voc(&mut self) -> u16 {
-        let mut voc: u16 = 0;
+        let mut voc: u16;
         let mut buffer: [u8; 2] = [0; 2];
         self.driver
             .write_read_bytes(&[ens160regs::DATA_TVOC], &mut buffer)
@@ -99,7 +99,7 @@ impl<'a> ENS160<'a> {
     }
 
     pub async fn get_eco2(&mut self) -> u16 {
-        let mut voc: u16 = 0;
+        let mut voc: u16;
         let mut buffer: [u8; 2] = [0; 2];
         self.driver
             .write_read_bytes(&[ens160regs::DATA_ECO2], &mut buffer)

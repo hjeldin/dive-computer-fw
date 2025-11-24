@@ -35,8 +35,8 @@ pub async fn air_quality_request_task(
         config
     ).unwrap();
 
-    let mut sequence: u16 = 0;
-    let mut rx_buf = [0xff; 16];
+    let sequence: u16;
+    let rx_buf = [0xff; 16];
     loop {
         usart_device.write(&rx_buf).await.unwrap();
         // usart_device.read_until_idle(&mut rx_buf).await.unwrap();

@@ -15,7 +15,7 @@ pub async fn btn_right_task(mut input: ExtiInput<'static>) {
         TRIGGER_BUZZ.store(100, Ordering::Relaxed);
         Timer::after_millis(100).await;
 
-        if (LOW_POWER_MODE.load(Ordering::Relaxed) == true) {
+        if LOW_POWER_MODE.load(Ordering::Relaxed) == true {
             info!("[NextButtonTask] Low power mode");
             break;
         }

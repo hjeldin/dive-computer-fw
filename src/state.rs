@@ -8,4 +8,8 @@ pub struct State {
     pub gyro_x: f32,
     pub gyro_y: f32,
     pub gyro_z: f32,
+    pub batt_voltage: f32,
+    pub low_batt: bool,
+    pub power_good: bool,
+    pub charge_status: bool,
 }

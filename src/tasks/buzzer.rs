@@ -1,5 +1,4 @@
 use crate::{LOW_POWER_MODE, TRIGGER_BUZZ, TRIGGER_VOLUME};
-use core::mem;
 use core::sync::atomic::Ordering;
 use cortex_m::prelude::_embedded_hal_Pwm;
 use defmt::info;
@@ -18,7 +17,7 @@ pub async fn buzzer_pwm_task(
     dma_channel: &'static mut Mutex<ThreadModeRawMutex, Peri<'static, DMA2_CH1>>,
 ) {
     let _dma = dma_channel.lock().await;
-    let lcd_brightness = PwmPin::new_ch2(pwm_pin, embassy_stm32::gpio::OutputType::PushPull);
+    let lcd_brightness = PwmPin::new(pwm_pin, embassy_stm32::gpio::OutputType::PushPull);
     let mut pwm = embassy_stm32::timer::simple_pwm::SimplePwm::new(
         timer,
         None,
@@ -56,7 +55,7 @@ pub async fn buzzer_pwm_task(
         Timer::after_millis(100).await;
         pwm.channel(pwm_channel).disable();
         TRIGGER_BUZZ.store(0, Ordering::Relaxed);
-        if (LOW_POWER_MODE.load(Ordering::Relaxed) == true) {
+        if LOW_POWER_MODE.load(Ordering::Relaxed) == true {
             pwm.channel(pwm_channel).set_duty_cycle(0);
             pwm.disable(pwm_channel);
             info!("[Buzzer] Low power mode");

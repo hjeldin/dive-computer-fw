@@ -22,7 +22,7 @@ use embassy_usb_dfu::Control;
 use crate::Irqs;
 
 #[embassy_executor::task]
-pub async fn usb_device_task(usb_otg_fs: Peri<'static, USB_OTG_FS>, pa12: Peri<'static, PA12>, pa11: Peri<'static, PA11>, flash: Peri<'static, FLASH>) {
+pub async fn usb_device_task(usb_otg_fs: Peri<'static, USB_OTG_FS>, pa12: Peri<'static, PA12>, pa11: Peri<'static, PA11>, _flash: Peri<'static, FLASH>) {
     let mut ep_out_buffer = [0u8; 256];
 
     // let flash = Flash::new_blocking(flash);

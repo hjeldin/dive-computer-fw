@@ -5,7 +5,7 @@ use crate::mmc5983ma::MMC5983;
 use libm::atan;
 
 #[embassy_executor::task]
-pub async fn threedof_task(mut driver: I2CDriver<'static>) {
+pub async fn threedof_task(driver: I2CDriver<'static>) {
     // let mut threedof_sensor = MMC5983::new(driver, Delay, 0x30);
     let mut threedof_sensor = MMC5983::new(driver, Delay);
     Timer::after_millis(1000).await;
@@ -15,7 +15,7 @@ pub async fn threedof_task(mut driver: I2CDriver<'static>) {
     loop {
         Timer::after_millis(1000).await;
         // Use SET/RESET compensated measurement to eliminate offset errors and reduce noise
-        let data = threedof_sensor.do_measurement_compensated().await.unwrap();
+        let _data = threedof_sensor.do_measurement_compensated().await.unwrap();
         // defmt::info!("HEADING: {}", calculate_heading(data.x, data.y, data.z));
         // defmt::info!("TEMP: {}", threedof_sensor.get_temp_c().await.unwrap());
     }
@@ -53,8 +53,8 @@ fn calculate_heading(
         let mut normalized_y = current_y as f64 - MID_VALUE;
         normalized_y /= MID_VALUE;
 
-        let mut normalized_z = current_z as f64 - MID_VALUE;
-        normalized_z /= MID_VALUE;
+        let mut _normalized_z = current_z as f64 - MID_VALUE;
+        _normalized_z /= MID_VALUE;
 
         // defmt::info!(
         //     "X axis raw value: {}\tY axis raw value: {}\tZ axis raw value: {}",

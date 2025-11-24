@@ -13,7 +13,7 @@ use core::mem;
 use core::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 use defmt::{info, unwrap, Debug2Format};
 use embassy_executor::Spawner;
-use embassy_stm32::exti::ExtiInput;
+use embassy_stm32::exti::{self, ExtiInput};
 use embassy_stm32::gpio::{Input, Level, Output, Pull, Speed};
 use embassy_stm32::i2c::{self, I2c};
 // use embassy_stm32::low_power::Executor;
@@ -23,6 +23,8 @@ use embassy_stm32::peripherals::{ADC1, DMA1_CH1, DMA1_CH3, DMA2_CH1, DMA2_CH4, P
 use embassy_stm32::rcc::disable;
 use embassy_stm32::rtc::{DateTime, DayOfWeek, Rtc, RtcConfig};
 use embassy_stm32::spi::{self, Spi};
+use embassy_stm32::spi::mode::Master as SpiMaster;
+use embassy_stm32::i2c::mode::Master as I2cMaster;
 use embassy_stm32::time::Hertz;
 use embassy_stm32::{bind_interrupts, pac, peripherals, sdmmc, usb, Peri};
 use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex;
@@ -34,7 +36,7 @@ use {defmt_rtt as _, panic_probe as _};
 use embassy_stm32::flash::{Flash, WRITE_SIZE};
 
 use embassy_futures::join::join;
-use embassy_stm32::adc::{Adc, SampleTime};
+use embassy_stm32::adc::Adc;
 use embassy_stm32::sdmmc::{DataBlock, Sdmmc};
 use crate::tasks::batt_voltage_monitor::batt_voltage_monitor_task;
 use crate::tasks::sd_card::sd_card_task;
@@ -71,6 +73,8 @@ static LOW_POWER_MODE: AtomicBool = AtomicBool::new(false);
 static RTC: StaticCell<Rtc> = StaticCell::new();
 
 bind_interrupts!(struct Irqs {
+    // EXTI => exti::InterruptHandler<peripherals::EXTI1>;
+    // EXTI4 => exti::InterruptHandler<peripherals::EXTI>;
     I2C1_EV => i2c::EventInterruptHandler<peripherals::I2C1>;
     I2C1_ER => i2c::ErrorInterruptHandler<peripherals::I2C1>;
     OTG_FS => usb::InterruptHandler<peripherals::USB_OTG_FS>;
@@ -87,6 +91,10 @@ pub static STATE: Mutex<ThreadModeRawMutex, state::State> = Mutex::new(state::St
     accel_x: 0.0,
     accel_y: 0.0,
     accel_z: 0.0,
+    batt_voltage: 0.0,
+    low_batt: false,
+    power_good: false,
+    charge_status: false,
 });
 
 // #[cortex_m_rt::entry]
@@ -100,9 +108,9 @@ pub static STATE: Mutex<ThreadModeRawMutex, state::State> = Mutex::new(state::St
 //     }
 // }
 
-static SHARED_I2C: StaticCell<Mutex<ThreadModeRawMutex, I2c<'static, Async>>> = StaticCell::new();
-static SHARED_SPI: StaticCell<Mutex<ThreadModeRawMutex, Spi<'static, Async>>> = StaticCell::new();
-static SHARED_SPI_BLUENRG: StaticCell<Mutex<ThreadModeRawMutex, Spi<'static, Async>>> = StaticCell::new();
+static SHARED_I2C: StaticCell<Mutex<ThreadModeRawMutex, I2c<'static, Async, I2cMaster>>> = StaticCell::new();
+static SHARED_SPI: StaticCell<Mutex<ThreadModeRawMutex, Spi<'static, Async, SpiMaster>>> = StaticCell::new();
+static SHARED_SPI_BLUENRG: StaticCell<Mutex<ThreadModeRawMutex, Spi<'static, Async, SpiMaster>>> = StaticCell::new();
 static SHARED_DC: StaticCell<Mutex<ThreadModeRawMutex, Output<'static>>> = StaticCell::new();
 static SHARED_RST: StaticCell<Mutex<ThreadModeRawMutex, Output<'static>>> = StaticCell::new();
 static SHARED_NRG_RST: StaticCell<Mutex<ThreadModeRawMutex, Output<'static>>> = StaticCell::new();
@@ -183,25 +191,25 @@ async fn async_main(spawner: Spawner) {
     let mut p = embassy_stm32::init(defaults);
 
     // give ownership of rtc peripheral to the executor
-    let mut rtc = embassy_stm32::rtc::Rtc::new(p.RTC, RtcConfig::default());
-    let _ = rtc.set_datetime(DateTime::from(2024, 12, 22, DayOfWeek::Sunday, 21, 37, 0, 0).unwrap());
-    let mut rtc = RTC.init(rtc);
+    // let mut rtc = embassy_stm32::rtc::Rtc::new(p.RTC, RtcConfig::default());
+    // let _ = rtc.set_datetime(DateTime::from(2024, 12, 22, DayOfWeek::Sunday, 21, 37, 0, 0).unwrap());
+    // let mut rtc = RTC.init(rtc);
 
     // embassy_stm32::low_power::stop_with_rtc(rtc);
 
     let mut del_var = 2000;
 
     let mut i2c_config = i2c::Config::default();
+    i2c_config.frequency = Hertz(400_000);
     i2c_config.timeout = embassy_time::Duration::from_millis(1000);
 
-    let mut i2c1: i2c::I2c<'_, embassy_stm32::mode::Async> = i2c::I2c::new(
+    let mut i2c1: i2c::I2c<'_, embassy_stm32::mode::Async, I2cMaster> = i2c::I2c::new(
         p.I2C1,
         p.PB8,
         p.PB9,
         Irqs,
         p.DMA1_CH6,
         p.DMA1_CH7,
-        Hertz(400_000),
         i2c_config,
     );
 
@@ -226,7 +234,7 @@ async fn async_main(spawner: Spawner) {
 
     let nrg_rst = Output::new(p.PA15, Level::Low, Speed::VeryHigh);
 
-    let static_spi1: &'static mut Mutex<ThreadModeRawMutex, Spi<'static, Async>> =
+    let static_spi1: &'static mut Mutex<ThreadModeRawMutex, Spi<'static, Async, SpiMaster>> =
         SHARED_SPI_BLUENRG.init(Mutex::new(spi_nrg));
     let static_nrg_rst: &'static mut Mutex<ThreadModeRawMutex, Output<'static>> =
         SHARED_NRG_RST.init(Mutex::new(nrg_rst));
@@ -272,9 +280,9 @@ async fn async_main(spawner: Spawner) {
     //
     // let mut button = ExtiInput::new(p.PC13, p.EXTI13, Pull::Up);
 
-    let button_right = ExtiInput::new(p.PA1, p.EXTI1, Pull::Up);
+    // let button_right = ExtiInput::new(p.PA1, p.EXTI1, Pull::Up, Irqs::EXTI);
 
-    let button_enter = ExtiInput::new(p.PA4, p.EXTI4, Pull::Up);
+    // let button_enter = ExtiInput::new(p.PA4, p.EXTI4, Pull::Up, Irqs::EXTI);
     //
     let static_dma_buzzer: &mut Mutex<ThreadModeRawMutex, Peri<DMA2_CH1>> =
         SHARED_DMA2_CH1.init(Mutex::new(p.DMA2_CH1));
@@ -299,13 +307,13 @@ async fn async_main(spawner: Spawner) {
 
     // spawner.spawn(ens160::ens_task(ens160_driver)).unwrap();
     // spawner.spawn(bmp280::bmp_task(bmp280_driver)).unwrap();
-    spawner.spawn(ms5837::ms5837_task(ms5837_driver, &STATE)).unwrap();
+    spawner.spawn(ms5837::ms5837_task(ms5837_driver, &STATE).expect("Failed to spawn MS5837 task"));
     // spawner
     //     .spawn(ili9341::screen_task(spi, static_dc, static_rst))
     //     .unwrap();
     // // spawner.spawn(decotask::deco_task()).unwrap();
-    spawner.spawn(btn_right_task(button_right)).unwrap();
-    spawner.spawn(btn_enter_task(button_enter)).unwrap();
+    // spawner.spawn(btn_right_task(button_right).expect("Failed to spawn Right button task"));
+    // spawner.spawn(btn_enter_task(button_enter).expect("Failed to spawn Enter button task"));
     // spawner
     //     .spawn(lcd_brightness_task(
     //         p.PC13,
@@ -320,8 +328,7 @@ async fn async_main(spawner: Spawner) {
             p.PC7,
             p.TIM3,
             static_dma_buzzer
-        ))
-        .unwrap();
+        ).expect("Failed to spawn Buzzer PWM task"));
     
     // Spawn BLE peripheral task
     // spawner
@@ -338,7 +345,7 @@ async fn async_main(spawner: Spawner) {
     let pa12 = p.PA12;
     let flash = p.FLASH;
     // spawner.spawn(usb_device_task(usb, pa12, pa11, flash)).unwrap();
-    spawner.spawn(sd_card_task(static_sdmmc1, &STATE)).unwrap();
+    spawner.spawn(sd_card_task(static_sdmmc1, &STATE).expect("Failed to spawn SD card task"));
     
     // Initialize QUADSPI flash timestamp task
     // QUADSPI pins: PA6 (IO3), PA7 (IO2), PB0 (IO1), PB1 (IO0), PB10 (CLK), PB11 (CS)
@@ -360,8 +367,8 @@ async fn async_main(spawner: Spawner) {
         static_i2c,
         0x30
     );
-    spawner.spawn(ninedof_task(ninedof_i2c, &STATE)).unwrap();
-    spawner.spawn(threedof_task(threedof_i2c)).unwrap();
+    spawner.spawn(ninedof_task(ninedof_i2c, &STATE).expect("Failed to spawn Ninedof task"));
+    spawner.spawn(threedof_task(threedof_i2c).expect("Failed to spawn Threedof task"));
 
     cs.set_low();
 
@@ -372,7 +379,8 @@ async fn async_main(spawner: Spawner) {
         p.PC2,
         p.ADC1,
         p.PC1,
-    )).unwrap();
+        &STATE,
+    ).expect("Failed to spawn Battery voltage monitor task"));
 
     // spawner.spawn(air_quality_request_task(
     //     p.USART1,
@@ -384,11 +392,6 @@ async fn async_main(spawner: Spawner) {
     // )).unwrap();
 
     loop {
-        info!("main loop - set high");
-        // bat_mon_en.set_high();
-        // Timer::after_millis(5000).await;
-        // info!("main loop - set low");
-        // bat_mon_en.set_low();
         Timer::after_millis(5000).await;
     }
 }

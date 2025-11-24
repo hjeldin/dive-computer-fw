@@ -5,7 +5,7 @@ use core::{
 };
 
 use defmt::info;
-use embassy_stm32::{gpio::Output, mode::Async};
+use embassy_stm32::{gpio::Output, mode::Async, spi::mode::Master};
 use embassy_sync::{blocking_mutex::raw::ThreadModeRawMutex, mutex::Mutex};
 use embassy_time::{Instant, Timer};
 use ili9341regs::{LcdOrientation, COLUMNS, PAGES};
@@ -82,7 +82,7 @@ mod ili9341regs {
 }
 
 pub struct ILI9341 {
-    driver: embassy_stm32::spi::Spi<'static, Async>,
+    driver: embassy_stm32::spi::Spi<'static, Async, Master>,
     dc: &'static Mutex<ThreadModeRawMutex, Output<'static>>,
     rst: &'static Mutex<ThreadModeRawMutex, Output<'static>>,
     orientation: LcdOrientation,
@@ -90,7 +90,7 @@ pub struct ILI9341 {
 
 impl ILI9341 {
     pub fn new(
-        device: embassy_stm32::spi::Spi<'static, Async>,
+        device: embassy_stm32::spi::Spi<'static, Async, Master>,
         dc: &'static Mutex<ThreadModeRawMutex, Output<'static>>,
         rst: &'static Mutex<ThreadModeRawMutex, Output<'static>>,
         lcd_orientation: LcdOrientation,
@@ -103,7 +103,7 @@ impl ILI9341 {
         }
     }
 
-    fn get_device(self) -> embassy_stm32::spi::Spi<'static, Async> {
+    fn get_device(self) -> embassy_stm32::spi::Spi<'static, Async, Master> {
         self.driver
     }
 
@@ -399,7 +399,7 @@ impl DrawTarget for ILI9341 {
 
 #[embassy_executor::task]
 pub async fn screen_task(
-    lcd: embassy_stm32::spi::Spi<'static, Async>,
+    lcd: embassy_stm32::spi::Spi<'static, Async, Master>,
     dc: &'static Mutex<ThreadModeRawMutex, Output<'static>>,
     rst: &'static Mutex<ThreadModeRawMutex, Output<'static>>,
 ) {
@@ -409,7 +409,7 @@ pub async fn screen_task(
     ili9341_lcd.init().await;
     defmt::info!("ILI9341 init done");
 
-    let mut scene_manager = unsafe { &mut scene_manager::INSTANCE };
+    let scene_manager = unsafe { &mut *(&raw mut scene_manager::INSTANCE) };
     scene_manager.add_scene(stm_graphics::startup::build_startup());
     scene_manager.add_scene(stm_graphics::dive::build_dive());
 
@@ -421,7 +421,7 @@ pub async fn screen_task(
     Timer::after_millis(500).await;
     ili9341_lcd.clear(0x0000);
     Timer::after_millis(500).await;
-    let mut lastrun = 0;
+    let mut lastrun;
     let mut r = status_bar.draw(&mut ili9341_lcd);
     let _ = r = battery_indicator.draw(&mut ili9341_lcd);
     let _ = scene_manager.draw_active_scene(&mut ili9341_lcd);
@@ -471,7 +471,7 @@ pub async fn screen_task(
         }
         lastrun = Instant::now().as_millis();
         Timer::after_millis(33).await;
-        if (LOW_POWER_MODE.load(Ordering::Relaxed) == true) {
+        if LOW_POWER_MODE.load(Ordering::Relaxed) == true {
             info!("[Display] Low power mode");
             break;
         }

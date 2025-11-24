@@ -11,7 +11,7 @@ pub async fn no_interaction_task() {
     let mut last_interaction = Instant::now();
     loop {
         let interaction = INTERACTION.load(Ordering::Relaxed);
-        if (interaction) {
+        if interaction {
             INTERACTION.store(false, Ordering::Relaxed);
             last_interaction = Instant::now();
         }

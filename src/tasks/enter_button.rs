@@ -15,7 +15,7 @@ pub async fn btn_enter_task(mut input: ExtiInput<'static>) {
         TRIGGER_BUZZ.store(1000, Ordering::Relaxed);
         Timer::after_millis(100).await;
 
-        if (LOW_POWER_MODE.load(Ordering::Relaxed) == true) {
+        if LOW_POWER_MODE.load(Ordering::Relaxed) == true {
             info!("[EnterButtonTask] Low power mode");
             break;
         }

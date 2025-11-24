@@ -1,15 +1,12 @@
 use core::ops::Deref;
 use embassy_stm32::peripherals::SDMMC1;
-use chrono::NaiveDateTime;
-use chrono::SecondsFormat::Millis;
 use defmt::{info, unwrap, Debug2Format};
-use embassy_stm32::{bind_interrupts, sdmmc};
-use embassy_stm32::sdmmc::{DataBlock, Sdmmc, SdmmcPeripheral};
+use embassy_stm32::sdmmc::{DataBlock, Sdmmc};
 use embassy_stm32::time::Hertz;
 use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex;
 use embassy_sync::mutex::Mutex;
 use embassy_time::{Duration, Timer, WithTimeout};
-use embedded_sdmmc::asynchronous::{Block, BlockCount, BlockDevice, BlockIdx, Mode, SdCard, VolumeIdx, VolumeManager};
+use embedded_sdmmc::asynchronous::{Block, BlockCount, BlockDevice, BlockIdx, Mode, VolumeIdx, VolumeManager};
 use crate::state;
 
 pub struct TimeSource;
@@ -44,7 +41,7 @@ impl<'a> SDMMCDevice<'a> {
         let mut sdmmc = self.sdmmc.lock().await;
         info!("Configured clock: {}", sdmmc.clock().0);
 
-        let mut err = None;
+        let mut _err = None;
 
         loop {
             match sdmmc.init_sd_card(Hertz(24_000_000)).await {
@@ -54,7 +51,7 @@ impl<'a> SDMMCDevice<'a> {
                 },
                 Err(e) => {
                     info!("waiting for card error, retrying: {:?}", e);
-                    err = Some(e);
+                    _err = Some(e);
                 }
             }
             Timer::after(Duration::from_millis(1000)).await;
@@ -72,7 +69,7 @@ impl<'a> BlockDevice for SDMMCDevice<'a> {
 
     async fn read(&self, blocks: &mut [Block], start_block_idx: BlockIdx) -> Result<(), Self::Error> {
         // Read blocks from the SD card
-        let mut sdmmc = critical_section::with(|cs| {
+        let mut sdmmc = critical_section::with(|_cs| {
             self.sdmmc.try_lock().unwrap()
         });
         Ok(for (i, block) in blocks.iter_mut().enumerate() {
@@ -84,7 +81,7 @@ impl<'a> BlockDevice for SDMMCDevice<'a> {
     }
 
     async fn write(&self, blocks: &[Block], start_block_idx: BlockIdx) -> Result<(), Self::Error> {
-        let mut sdmmc = critical_section::with(|cs| {
+        let mut sdmmc = critical_section::with(|_cs| {
             self.sdmmc.try_lock().unwrap()
         });
         Ok(for (i, block) in blocks.iter().enumerate() {
@@ -97,7 +94,7 @@ impl<'a> BlockDevice for SDMMCDevice<'a> {
 
     async fn num_blocks(&self) -> Result<BlockCount, Self::Error> {
         // Return the number of blocks on the SD card
-        let mut sdmmc = critical_section::with(|cs| {
+        let _sdmmc = critical_section::with(|_cs| {
             self.sdmmc.try_lock().unwrap()
         });
         // let mut card = sdmmc.card().unwrap().get_sd_card();

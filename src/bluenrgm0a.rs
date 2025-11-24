@@ -1,5 +1,6 @@
 use embassy_stm32::gpio::Output;
 use embassy_stm32::mode::Async;
+use embassy_stm32::spi::mode::Master as SpiMaster;
 use embassy_sync::mutex::Mutex;
 use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex;
 use embassy_time::Timer;
@@ -8,13 +9,13 @@ use core::convert::TryInto;
 use crate::state::State;
 
 pub struct BLUENRGM0A {
-    driver: &'static Mutex<ThreadModeRawMutex, embassy_stm32::spi::Spi<'static, Async>>,
+    driver: &'static Mutex<ThreadModeRawMutex, embassy_stm32::spi::Spi<'static, Async, SpiMaster>>,
     rst: &'static Mutex<ThreadModeRawMutex, Output<'static>>,
 }
 
 impl BLUENRGM0A {
     pub fn new(
-        driver: &'static Mutex<ThreadModeRawMutex, embassy_stm32::spi::Spi<'static, Async>>,
+        driver: &'static Mutex<ThreadModeRawMutex, embassy_stm32::spi::Spi<'static, Async, SpiMaster>>,
         rst: &'static Mutex<ThreadModeRawMutex, Output<'static>>,
     ) -> Self {
         BLUENRGM0A {
@@ -93,7 +94,7 @@ impl BLUENRGM0A {
             info!("Waiting additional 500ms and rechecking...");
             Timer::after_millis(500).await;
             
-            for i in 0..10 {
+            for _i in 0..10 {
                 let (status, _) = self.read_status();
                 if (status & 0x02) != 0 {
                     info!("Module now ready! Status: 0x{:02X}", status);
@@ -804,7 +805,7 @@ pub fn aci_gatt_update_char_value(
 
 #[embassy_executor::task]
 pub async fn ble_peripheral_task(
-    driver: &'static Mutex<ThreadModeRawMutex, embassy_stm32::spi::Spi<'static, Async>>,
+    driver: &'static Mutex<ThreadModeRawMutex, embassy_stm32::spi::Spi<'static, Async, SpiMaster>>,
     rst: &'static Mutex<ThreadModeRawMutex, Output<'static>>,
     state: &'static Mutex<ThreadModeRawMutex, State>,
 ) {

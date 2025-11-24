@@ -215,12 +215,12 @@ impl<'a> MS5837<'a> {
     }
 
     pub async fn altitude(&mut self) -> f32 {
-        let ( pressure, temperature ) = self.calculate_temperature_pression(Osr256).await;
+        let ( pressure, _temperature ) = self.calculate_temperature_pression(Osr256).await;
         (1.0 - powf(pressure/1013.25, 0.190284)) * 145366.45 * 0.3048
     }
 
-    pub async fn depth(&mut self, density: f32) -> f32 {
-        let ( pressure, temperature ) = self.calculate_temperature_pression(Osr256).await;
+    pub async fn depth(&mut self, _density: f32) -> f32 {
+        let ( pressure, _temperature ) = self.calculate_temperature_pression(Osr256).await;
         ((pressure / 1013.25) - 1.0) * 10.0
     }
 
@@ -267,23 +267,23 @@ impl<'a> MS5837<'a> {
 
         // info!("Temperature: {}", temperature);
 
-        let mut t2;
+        let t2;
         let mut offset2;
         let mut sensitivity2;
 
         // Second order temperature compensation
         if temperature < 2000.0 {
             t2 = (3.0 * powf(dt, 2.0)) / 8589934592.0;
-            offset2 = 3.0 * powf((temperature - 2000.0), 2.0) / 2.0;
-            sensitivity2 = 5.0 * powf((temperature - 2000.0), 2.0) / 8.0;
+            offset2 = 3.0 * powf(temperature - 2000.0, 2.0) / 2.0;
+            sensitivity2 = 5.0 * powf(temperature - 2000.0, 2.0) / 8.0;
 
             if temperature < -1500.0 {
-                offset2 += 7.0 * powf((temperature + 1500.0),2.0);
-                sensitivity2 += 4.0 * powf((temperature + 1500.0),2.0);
+                offset2 += 7.0 * powf(temperature + 1500.0, 2.0);
+                sensitivity2 += 4.0 * powf(temperature + 1500.0, 2.0);
             }
         } else {
             t2 = (2.0 * powf(dt, 2.0)) / 137438953472.0;
-            offset2 = powf((temperature - 2000.0),2.0) / 16.0;
+            offset2 = powf(temperature - 2000.0, 2.0) / 16.0;
             sensitivity2 = 0.0;
         }
 
@@ -321,8 +321,8 @@ pub async fn ms5837_task(
             .await;
 
 
-        let depth = ms5837_sensor.depth(1.0).await;
-        let altitude = ms5837_sensor.altitude().await;
+        let _depth = ms5837_sensor.depth(1.0).await;
+        let _altitude = ms5837_sensor.altitude().await;
         // info!("Altitude: {}, Depth: {}", altitude, depth);
 
         // info!("Pressure: {}, Temperature: {}", result.0, result.1);
@@ -333,7 +333,7 @@ pub async fn ms5837_task(
         // todo: check ascent speed
         
         Timer::after_millis(1000).await;
-        if (LOW_POWER_MODE.load(Ordering::Relaxed) == true) {
+        if LOW_POWER_MODE.load(Ordering::Relaxed) == true {
             info!("[MS5837] Low power mode");
             return;
         }

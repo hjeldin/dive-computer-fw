@@ -1,16 +1,16 @@
-use embassy_stm32::{gpio::Output, mode::Async, spi::Spi};
+use embassy_stm32::{gpio::Output, mode::Async, spi::Spi, spi::mode::Master};
 use embassy_sync::{blocking_mutex::raw::ThreadModeRawMutex, mutex::Mutex};
 use embassy_time::Timer;
 
 pub struct SPIDriver<'a> {
-    spi: &'a Mutex<ThreadModeRawMutex, Spi<'static, Async>>,
+    spi: &'a Mutex<ThreadModeRawMutex, Spi<'static, Async, Master>>,
     dc: &'a Mutex<ThreadModeRawMutex, Output<'static>>,
     rst: &'a Mutex<ThreadModeRawMutex, Output<'static>>,
 }
 
 impl<'a> SPIDriver<'a> {
     pub fn new(
-        spi: &'a Mutex<ThreadModeRawMutex, Spi<'static, Async>>,
+        spi: &'a Mutex<ThreadModeRawMutex, Spi<'static, Async, Master>>,
         dc: &'a Mutex<ThreadModeRawMutex, Output<'static>>,
         rst: &'a Mutex<ThreadModeRawMutex, Output<'static>>,
     ) -> Self {

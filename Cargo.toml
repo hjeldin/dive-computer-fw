@@ -1,6 +1,6 @@
 [package]
 authors = ["hjeldin"]
-edition = "2018"
+edition = "2024"
 readme = "README.md"
 name = "stm-blink"
 version = "0.1.0"

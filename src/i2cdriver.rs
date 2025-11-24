@@ -1,11 +1,11 @@
 use core::borrow::Borrow;
 
-use embassy_stm32::{i2c::I2c, mode::Async};
+use embassy_stm32::{i2c::I2c, i2c::mode::Master, mode::Async};
 use embassy_sync::{blocking_mutex::raw::ThreadModeRawMutex, mutex::Mutex};
 use embedded_hal_async::i2c::ErrorType;
 
 pub struct I2CDriver<'a> {
-    i2c: &'a Mutex<ThreadModeRawMutex, I2c<'static, Async>>,
+    i2c: &'a Mutex<ThreadModeRawMutex, I2c<'static, Async, Master>>,
     device_address: u8,
 }
 
@@ -22,12 +22,12 @@ impl embedded_hal_async::i2c::I2c<u8> for I2CDriver<'_> {
         Ok(())
     }
 
-    async fn read(&mut self, address: u8, read: &mut [u8]) -> Result<(), Self::Error> {
+    async fn read(&mut self, _address: u8, _read: &mut [u8]) -> Result<(), Self::Error> {
         self.read_byte().await.unwrap();
         Ok(())
     }
 
-    async fn write(&mut self, address: u8, write: &[u8]) -> Result<(), Self::Error> {
+    async fn write(&mut self, _address: u8, write: &[u8]) -> Result<(), Self::Error> {
         self.write_bytes(write).await.unwrap();
         Ok(())
     }
@@ -45,7 +45,7 @@ impl embedded_hal_async::i2c::I2c<u8> for I2CDriver<'_> {
 
 impl<'a> I2CDriver<'a> {
     pub fn new(
-        i2c: &'a Mutex<ThreadModeRawMutex, I2c<'static, Async>>,
+        i2c: &'a Mutex<ThreadModeRawMutex, I2c<'static, Async, Master>>,
         device_address: u8,
     ) -> Self {
         Self {

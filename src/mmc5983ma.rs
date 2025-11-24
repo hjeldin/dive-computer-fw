@@ -1,5 +1,3 @@
-#![no_std]
-
 use bitfield::bitfield;
 use embedded_hal_async::{delay::DelayNs, i2c::I2c};
 use crate::i2cdriver::I2CDriver;

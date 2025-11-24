@@ -26,6 +26,11 @@ rustflags = [
   # "-C", "link-arg=-Wl,-Tlink.x",
   # "-C", "link-arg=-nostartfiles",
   "-C", "link-arg=-Tdefmt.x",
+  # emit stack sizes to be analyzed (TODO: remove when done)
+#  '-Zemit-stack-sizes',
+#  '-Clinker-plugin-lto',
+#  "-Clink-arg=-mllvm=-lto-embed-bitcode=optimized",
+#  "-Clink-arg=-mllvm=-stack-size-section",
 ]
 
 [build]

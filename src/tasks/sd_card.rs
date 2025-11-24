@@ -107,6 +107,7 @@ impl<'a> BlockDevice for SDMMCDevice<'a> {
 
 #[embassy_executor::task]
 pub async fn sd_card_task(sdmmc: &'static Mutex<ThreadModeRawMutex, Sdmmc<'static, SDMMC1>>, state: &'static Mutex<ThreadModeRawMutex, state::State>) {
+    return;
     let mut device = SDMMCDevice::new(sdmmc);
     device.init().await;
 
@@ -119,24 +120,19 @@ pub async fn sd_card_task(sdmmc: &'static Mutex<ThreadModeRawMutex, Sdmmc<'stati
     let root_dir = volume0.open_root_dir().unwrap();
     info!("Root dir: {:#?}", Debug2Format(&root_dir));
 
-    let file = root_dir.open_file_in_dir("test.txt", Mode::ReadOnly).await.unwrap();
-
-    while !file.is_eof() {
-        let mut buf = [0u8; 512];
-        let bytes_read = file.read(&mut buf).await.unwrap();
-        info!("Read {} bytes: {:?}", bytes_read, &buf[..bytes_read]);
-    }
-
-    file.close().await.unwrap();
 
     let mut file = root_dir.open_file_in_dir("test.txt", Mode::ReadWriteCreateOrAppend).await.unwrap();
 
     loop {
-        Timer::after_millis(1000).await;
-        let state = state.lock().await;
-        let mut buf = [0u8; 32];
+        Timer::after_millis(100).await;
+        let mut state = state.lock().await;
+        let mut buf = [0u8; 64];
         let text = format_no_std::show(&mut buf, format_args!("{:.5}\n{:.1}\n", state.pressure, state.temperature)).unwrap();
         file.write(&text.as_bytes()).await.unwrap();
+        let accel = format_no_std::show(&mut buf, format_args!("Accel(m/s²): {:.2}, {:.2}, {:.2}\n", state.accel_x, state.accel_y, state.accel_z)).unwrap();
+        file.write(&accel.as_bytes()).await.unwrap();
+        let gyro = format_no_std::show(&mut buf, format_args!("Gyro(rad/s): {:.2}, {:.2}, {:.2}\n", state.gyro_x, state.gyro_y, state.gyro_z)).unwrap();
+        file.write(&gyro.as_bytes()).await.unwrap();
         file.flush().await.unwrap();
     }
 }

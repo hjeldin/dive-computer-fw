@@ -1,23 +1,22 @@
 use crate::i2cdriver::I2CDriver;
 use ism330dhcx::{ctrl1xl, ctrl2g, Ism330Dhcx};
 use embassy_time::{Delay, Duration, Instant, Timer};
-use mmc5983ma::MMC5983;
+use crate::mmc5983ma::MMC5983;
 use libm::atan;
 
 #[embassy_executor::task]
 pub async fn threedof_task(mut driver: I2CDriver<'static>) {
-    let mut threedof_sensor = MMC5983::new(&mut driver, Delay, 0x30);
+    // let mut threedof_sensor = MMC5983::new(driver, Delay, 0x30);
+    let mut threedof_sensor = MMC5983::new(driver, Delay);
     Timer::after_millis(1000).await;
     threedof_sensor.init().await.unwrap();
     threedof_sensor.reset().await.unwrap();
 
     loop {
         Timer::after_millis(1000).await;
-        defmt::info!("WTF");
-        // unsafe {
-        //     let data = threedof_sensor.read_raw_measurement_18().await.unwrap();
-        //     defmt::info!("HEADING: {}", calculate_heading(data.x, data.y, data.z));
-        // }
+        // Use SET/RESET compensated measurement to eliminate offset errors and reduce noise
+        let data = threedof_sensor.do_measurement_compensated().await.unwrap();
+        // defmt::info!("HEADING: {}", calculate_heading(data.x, data.y, data.z));
         // defmt::info!("TEMP: {}", threedof_sensor.get_temp_c().await.unwrap());
     }
 }
@@ -34,17 +33,17 @@ fn calculate_heading(
     let mut good = true;
 
     // Check if the values are within the valid range
-    // if current_x == 0 || current_x >= MAX_VALUE {
-    //     good = false;
-    // }
-    //
-    // if current_y == 0 || current_y >= MAX_VALUE {
-    //     good = false;
-    // }
-    //
-    // if current_z == 0 || current_z >= MAX_VALUE {
-    //     good = false;
-    // }
+    if current_x == 0 || current_x >= MAX_VALUE {
+        good = false;
+    }
+    
+    if current_y == 0 || current_y >= MAX_VALUE {
+        good = false;
+    }
+    
+    if current_z == 0 || current_z >= MAX_VALUE {
+        good = false;
+    }
 
     if good {
         // Normalize the values
@@ -57,10 +56,10 @@ fn calculate_heading(
         let mut normalized_z = current_z as f64 - MID_VALUE;
         normalized_z /= MID_VALUE;
 
-        defmt::info!(
-            "X axis raw value: {}\tY axis raw value: {}\tZ axis raw value: {}",
-            current_x, current_y, current_z
-        );
+        // defmt::info!(
+        //     "X axis raw value: {}\tY axis raw value: {}\tZ axis raw value: {}",
+        //     current_x, current_y, current_z
+        // );
 
         // Calculate heading
         let heading = if normalized_y != 0.0 {

@@ -30,7 +30,7 @@
           else if builtins.pathExists ./rust-toolchain then
             rust.fromRustupToolchainFile ./rust-toolchain
           else
-            rust.stable.latest.default.override {
+            rust.nightly.latest.default.override {
               extensions = [ "rust-src" "rustfmt" ];
             };
       };
@@ -38,8 +38,8 @@
       devShells = forEachSupportedSystem ({ pkgs }: {
         default = pkgs.mkShell {
           packages = with pkgs; [
-            SDL2
             rustToolchain
+            SDL2
             openssl
             pkg-config
             cargo-deny
@@ -63,7 +63,7 @@
             gef
 
             # Rust Embedded
-            (rust-bin.stable.latest.default.override {
+            (rust-bin.nightly.latest.default.override {
               extensions = [ "rust-src" ];
               targets = [ "thumbv7em-none-eabihf" "thumbv6m-none-eabi" ];
             })
@@ -71,6 +71,7 @@
 
           buildInputs = with pkgs; [
             SDL2
+            libxml2
           ];
 
           nativeBuildInputs = with pkgs; [

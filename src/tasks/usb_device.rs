@@ -1,8 +1,9 @@
+use core::cell::RefCell;
 use core::sync::atomic::{AtomicBool, Ordering};
 use defmt::{info, warn};
 use embassy_futures::join::join;
 use embassy_stm32::Peri;
-use embassy_stm32::peripherals::{PA11, PA12, USB_OTG_FS};
+use embassy_stm32::peripherals::{FLASH, PA11, PA12, USB_OTG_FS};
 use embassy_stm32::usb::{Driver, Instance};
 use embassy_time::Timer;
 use embassy_usb::class::hid::{HidReaderWriter, ReportId, RequestHandler};
@@ -11,11 +12,27 @@ use embassy_usb::{Builder, Handler};
 use embassy_usb::class::cdc_acm::{CdcAcmClass, State};
 use embassy_usb::driver::EndpointError;
 use usbd_hid::descriptor::{KeyboardReport, SerializedDescriptor};
+
+
+use embassy_boot_stm32::{AlignedBuffer, BlockingFirmwareState, FirmwareUpdaterConfig};
+use embassy_stm32::flash::{Flash, WRITE_SIZE};
+use embassy_sync::blocking_mutex::Mutex;
+use embassy_usb_dfu::consts::DfuAttributes;
+use embassy_usb_dfu::Control;
 use crate::Irqs;
 
 #[embassy_executor::task]
-pub async fn usb_device_task(usb_otg_fs: Peri<'static, USB_OTG_FS>, pa12: Peri<'static, PA12>, pa11: Peri<'static, PA11>) {
+pub async fn usb_device_task(usb_otg_fs: Peri<'static, USB_OTG_FS>, pa12: Peri<'static, PA12>, pa11: Peri<'static, PA11>, flash: Peri<'static, FLASH>) {
     let mut ep_out_buffer = [0u8; 256];
+
+    // let flash = Flash::new_blocking(flash);
+    // let flash = Mutex::new(RefCell::new(flash));
+
+    // let fw_config = FirmwareUpdaterConfig::from_linkerfile_blocking(&flash, &flash);
+    // let mut magic = AlignedBuffer([0; WRITE_SIZE]);
+    // let mut firmware_state = BlockingFirmwareState::from_config(fw_config, &mut magic.0);
+    // firmware_state.mark_booted().expect("Failed to mark booted");
+
     let mut config = embassy_stm32::usb::Config::default();
 
     // Do not enable vbus_detection. This is a safe default that works in all boards.
@@ -40,6 +57,8 @@ pub async fn usb_device_task(usb_otg_fs: Peri<'static, USB_OTG_FS>, pa12: Peri<'
     let mut control_buf = [0; 64];
 
     let mut state = State::new();
+
+    // let mut dfu_state = Control::new(fw_config, DfuAttributes::CAN_DOWNLOAD);
 
     let mut builder = Builder::new(
         driver,

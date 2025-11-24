@@ -1,19 +1,39 @@
 use crate::i2cdriver::I2CDriver;
 use ism330dhcx::{ctrl1xl, ctrl2g, Ism330Dhcx};
 use embassy_time::{Delay, Duration, Instant, Timer};
-use mmc5983ma::MMC5983;
+use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex;
+use embassy_sync::mutex::Mutex;
+use crate::state;
 
 #[embassy_executor::task]
-pub async fn ninedof_task(mut driver: I2CDriver<'static>) {
+pub async fn ninedof_task(mut driver: I2CDriver<'static>, state: &'static Mutex<ThreadModeRawMutex, state::State>) {
     let mut sixdof_sensor = Ism330Dhcx::new(&mut driver).await.unwrap();
     boot_sensor(&mut sixdof_sensor, &mut driver).await;
+    const G_TO_MPS2: f64 = 9.80665; // Standard gravity in m/s²
+    
     loop {
-        Timer::after_millis(1000).await;
+        Timer::after_millis(100).await;
         {
             let accel_data = sixdof_sensor.get_accelerometer(&mut driver).await.unwrap();
             let gyro_data = sixdof_sensor.get_gyroscope(&mut driver).await.unwrap();
-            defmt::info!("{}", accel_data.as_g());
-            defmt::info!("{}", gyro_data.as_rad());
+            // Convert accelerometer from g to m/s² (SI units)
+            let accel_g = accel_data.as_g();
+            let accel_mps2 = [
+                accel_g[0] * G_TO_MPS2,
+                accel_g[1] * G_TO_MPS2,
+                accel_g[2] * G_TO_MPS2,
+            ];
+            // defmt::info!("Accel (m/s²): {}", accel_mps2);
+            // Gyroscope already in SI units (rad/s)
+            // defmt::info!("Gyro (rad/s): {}", gyro_data.as_rad());
+            let mut state = state.lock().await;
+            state.accel_x = accel_mps2[0] as f32;
+            state.accel_y = accel_mps2[1] as f32;
+            state.accel_z = accel_mps2[2] as f32;
+            state.gyro_x = gyro_data.as_rad()[0] as f32;
+            state.gyro_y = gyro_data.as_rad()[1] as f32;
+            state.gyro_z = gyro_data.as_rad()[2] as f32;
+            drop(state);
         }
     }
 }

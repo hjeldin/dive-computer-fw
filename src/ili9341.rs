@@ -438,6 +438,8 @@ pub async fn screen_task(
             time: Time::new(22, 35),
         },
         battery: 0xFF,
+        heading: 0.0,
+        set_course: 0.0,
     };
 
     loop {

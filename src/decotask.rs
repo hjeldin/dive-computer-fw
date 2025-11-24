@@ -1,7 +1,7 @@
 use crate::LOW_POWER_MODE;
 use core::sync::atomic::Ordering;
 use defmt::info;
-use dive_deco_x86::*;
+use dive_computer_deco::*;
 use embassy_time::Timer;
 
 #[embassy_executor::task]

@@ -38,7 +38,7 @@ pub async fn batt_voltage_monitor_task(low_batt_pin: Peri<'static, PC3>,
     let convert_to_millivolts = |sample: f32| {
         // MIN   TYP   MAX
         //1.182 1.212 1.232
-        const VREFINT_MV: f32 = 1212.0; // mV
+        const VREFINT_MV: f32 = 12.120; // mV
         
         (sample * VREFINT_MV / vrefint_cal as f32) as f32
     };
@@ -59,25 +59,9 @@ pub async fn batt_voltage_monitor_task(low_batt_pin: Peri<'static, PC3>,
         state.power_good = power_good.is_low();
         state.charge_status = charge_status.is_low();
         state.low_batt = low_batt.is_low();
-        // print low battery status
-        // if low_batt.is_low() {
-        //     info!("Low battery");
-        // } else {
-        //     info!("Battery OK");
-        // }
-
-        // // print power good status
-        // if power_good.is_low() {
-        //     info!("Power good");
-        // } else {
-        //     info!("Power not good");
-        // }
-
-        // // print charge status
-        // if charge_status.is_low() {
-        //     info!("Charging");
-        // } else {
-        //     info!("Not charging");
-        // }
+        
+        if low_batt.is_low() {
+            info!("Low battery");
+        }
     }
 }

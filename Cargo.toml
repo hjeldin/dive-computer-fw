@@ -48,6 +48,8 @@ usbd-hid = "0.8.1"
 dive-computer-deco = { path = "../dive-computer-deco", default-features = false, features = [] }
 dive-computer-proto = { path = "../dive-computer-proto" }
 embedded-storage = "0.3.1"
+ahrs = { version = "0.8.0", default-features = false }
+nalgebra = { version = "0.34", default-features = false }
 
 [patch.crates-io]
 # embassy-time = { git = "https://github.com/embassy-rs/embassy", rev = "9ff8c70009233d4ea05208e3aa649c5b15512cab" }

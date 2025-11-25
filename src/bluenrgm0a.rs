@@ -11,16 +11,19 @@ use crate::state::State;
 pub struct BLUENRGM0A {
     driver: &'static Mutex<ThreadModeRawMutex, embassy_stm32::spi::Spi<'static, Async, SpiMaster>>,
     rst: &'static Mutex<ThreadModeRawMutex, Output<'static>>,
+    cs: &'static Mutex<ThreadModeRawMutex, Output<'static>>,
 }
 
 impl BLUENRGM0A {
     pub fn new(
         driver: &'static Mutex<ThreadModeRawMutex, embassy_stm32::spi::Spi<'static, Async, SpiMaster>>,
         rst: &'static Mutex<ThreadModeRawMutex, Output<'static>>,
+        cs: &'static Mutex<ThreadModeRawMutex, Output<'static>>,
     ) -> Self {
         BLUENRGM0A {
             driver,
             rst,
+            cs,
         }
     }
 
@@ -39,75 +42,82 @@ impl BLUENRGM0A {
     /// Test basic SPI communication with the BlueNRG-M0A module
     /// This verifies that the module is responding before attempting BLE initialization
     pub async fn test_communication(&self) -> Result<bool, AciError> {
-        info!("Testing BlueNRG-M0A communication...");
+        let mut cs = self.cs.try_lock().unwrap();
+        for _ in 0..1000 {
+            Timer::after_millis(1).await;
+            cs.set_low();
+            Timer::after_millis(1).await;
+            cs.set_high();
+        }
+        // info!("Testing BlueNRG-M0A communication...");
         
-        // Read status multiple times to check for any response
-        let mut status_samples = [0u8; 20];
-        let mut non_zero_count = 0;
-        let mut ready_count = 0;
+        // // Read status multiple times to check for any response
+        // let mut status_samples = [0u8; 20];
+        // let mut non_zero_count = 0;
+        // let mut ready_count = 0;
         
-        for i in 0..20 {
-            let (status, first_byte) = self.read_status();
-            status_samples[i] = status;
+        // for i in 0..20 {
+        //     let (status, first_byte) = self.read_status();
+        //     status_samples[i] = status;
             
-            if status != 0x00 {
-                non_zero_count += 1;
-                info!("Status sample {}: 0x{:02X} (bits: ready={}, event={})", 
-                      i, status, (status & 0x02) != 0, (status & 0x01) != 0);
+        //     if status != 0x00 {
+        //         non_zero_count += 1;
+        //         info!("Status sample {}: 0x{:02X} (bits: ready={}, event={})", 
+        //               i, status, (status & 0x02) != 0, (status & 0x01) != 0);
                 
-                if (status & 0x02) != 0 {
-                    ready_count += 1;
-                }
+        //         if (status & 0x02) != 0 {
+        //             ready_count += 1;
+        //         }
                 
-                if let Some(byte) = first_byte {
-                    info!("  First event byte: 0x{:02X}", byte);
-                }
-            }
+        //         if let Some(byte) = first_byte {
+        //             info!("  First event byte: 0x{:02X}", byte);
+        //         }
+        //     }
             
-            Timer::after_millis(50).await;
-        }
+        //     Timer::after_millis(50).await;
+        // }
         
-        info!("Communication test results:");
-        info!("  Total samples: 20");
-        info!("  Non-zero status bytes: {}", non_zero_count);
-        info!("  Ready status (bit 1 set): {}", ready_count);
-        // info!("  Status samples: {:X?}", status_samples);
+        // info!("Communication test results:");
+        // info!("  Total samples: 20");
+        // info!("  Non-zero status bytes: {}", non_zero_count);
+        // info!("  Ready status (bit 1 set): {}", ready_count);
+        // // info!("  Status samples: {:X?}", status_samples);
         
-        // Check if we're getting any response
-        if non_zero_count == 0 {
-            error!("No response from BlueNRG-M0A - all status bytes are 0x00");
-            error!("Possible issues:");
-            error!("  1. CS (chip select) not controlled");
-            error!("  2. SPI wiring incorrect (MISO not connected)");
-            error!("  3. Module not powered");
-            error!("  4. Module not responding after reset");
-            return Ok(false);
-        }
+        // // Check if we're getting any response
+        // if non_zero_count == 0 {
+        //     error!("No response from BlueNRG-M0A - all status bytes are 0x00");
+        //     error!("Possible issues:");
+        //     error!("  1. CS (chip select) not controlled");
+        //     error!("  2. SPI wiring incorrect (MISO not connected)");
+        //     error!("  3. Module not powered");
+        //     error!("  4. Module not responding after reset");
+        //     return Ok(false);
+        // }
         
-        // Check if module ever becomes ready
-        if ready_count == 0 {
-            warn!("Module responding but never reports ready status");
-            warn!("Status bytes received but bit 1 (ready) never set");
-            warn!("Module may need more time to initialize");
+        // // Check if module ever becomes ready
+        // if ready_count == 0 {
+        //     warn!("Module responding but never reports ready status");
+        //     warn!("Status bytes received but bit 1 (ready) never set");
+        //     warn!("Module may need more time to initialize");
             
-            // Try waiting a bit longer and checking again
-            info!("Waiting additional 500ms and rechecking...");
-            Timer::after_millis(500).await;
+        //     // Try waiting a bit longer and checking again
+        //     info!("Waiting additional 500ms and rechecking...");
+        //     Timer::after_millis(500).await;
             
-            for _i in 0..10 {
-                let (status, _) = self.read_status();
-                if (status & 0x02) != 0 {
-                    info!("Module now ready! Status: 0x{:02X}", status);
-                    return Ok(true);
-                }
-                Timer::after_millis(100).await;
-            }
+        //     for _i in 0..10 {
+        //         let (status, _) = self.read_status();
+        //         if (status & 0x02) != 0 {
+        //             info!("Module now ready! Status: 0x{:02X}", status);
+        //             return Ok(true);
+        //         }
+        //         Timer::after_millis(100).await;
+        //     }
             
-            warn!("Module still not ready after additional wait");
-            return Ok(false);
-        }
+        //     warn!("Module still not ready after additional wait");
+        //     return Ok(false);
+        // }
         
-        info!("Communication test PASSED - module is responding");
+        // info!("Communication test PASSED - module is responding");
         Ok(true)
     }
 
@@ -118,16 +128,16 @@ impl BLUENRGM0A {
     /// IMPORTANT: BlueNRG-M0A SPI protocol requires CS to be controlled manually.
     /// The status byte is read by sending a dummy byte (0xFF) while CS is low.
     fn read_status(&self) -> (u8, Option<u8>) {
+        let mut cs = self.cs.try_lock().unwrap();
         let mut spi = self.driver.try_lock().unwrap();
         let mut status = [0u8];
         let dummy = [0xFFu8];
         
-        // Note: If CS is not being controlled, we'll read 0x00 or garbage
-        // The embassy SPI driver should handle CS automatically if configured,
-        // but BlueNRG-M0A may need manual CS control
+        // CS must be low during SPI transfer
+        cs.set_low();
         
         // Send dummy byte to read status
-        match spi.blocking_transfer(&mut status, &dummy) {
+        let result = match spi.blocking_transfer(&mut status, &dummy) {
             Ok(_) => {
                 let status_byte = status[0];
                 
@@ -147,17 +157,23 @@ impl BLUENRGM0A {
                     let mut first_byte = [0u8];
                     let dummy_byte = [0xFFu8];
                     if spi.blocking_transfer(&mut first_byte, &dummy_byte).is_ok() {
-                        return (status_byte, Some(first_byte[0]));
+                        (status_byte, Some(first_byte[0]))
+                    } else {
+                        (status_byte, None)
                     }
+                } else {
+                    (status_byte, None)
                 }
-                
-                (status_byte, None)
             }
             Err(e) => {
                 warn!("SPI transfer error reading status: {:?}", e);
                 (0x00, None)
             }
-        }
+        };
+        
+        // CS high after transfer
+        cs.set_high();
+        result
     }
 
     /// Wait for module to be ready (status = 0x02)
@@ -190,10 +206,14 @@ impl BLUENRGM0A {
         
         info!("Sending command: opcode=0x{:04X}, len={}", opcode, cmd.len());
         
-        // Send command - lock is released when spi goes out of scope
+        // Send command - CS must be low during transfer
         {
+            let mut cs = self.cs.try_lock().unwrap();
             let mut spi = self.driver.try_lock().unwrap();
-            spi.blocking_write(cmd).map_err(|_| AciError::SpiError)?;
+            cs.set_low();
+            let result = spi.blocking_write(cmd).map_err(|_| AciError::SpiError);
+            cs.set_high();
+            result?;
         }
         
         // Small delay to allow command to be processed
@@ -222,10 +242,14 @@ impl BLUENRGM0A {
         }
         let opcode = cmd[0] as u16 | ((cmd[1] as u16) << 8);
         
-        // Send command - lock is released when spi goes out of scope
+        // Send command - CS must be low during transfer
         {
+            let mut cs = self.cs.try_lock().unwrap();
             let mut spi = self.driver.try_lock().unwrap();
-            spi.blocking_write(cmd).map_err(|_| AciError::SpiError)?;
+            cs.set_low();
+            let result = spi.blocking_write(cmd).map_err(|_| AciError::SpiError);
+            cs.set_high();
+            result?;
         }
         
         // Small delay to allow command to be processed
@@ -254,13 +278,18 @@ impl BLUENRGM0A {
         // Some implementations: 0x02 = ready, 0x03 = ready + event
         if (status & 0x01) == 0x01 || status == 0x03 {
             // Event available
+            let mut cs = self.cs.try_lock().unwrap();
             let mut spi = self.driver.try_lock().unwrap();
+            
+            // CS must be low during entire event read
+            cs.set_low();
             
             let mut event = heapless::Vec::<u8, 255>::new();
             
             // If we got a first byte from status read, use it
             let event_code = if let Some(first_byte) = first_byte_opt {
                 if event.push(first_byte).is_err() {
+                    cs.set_high();
                     return None;
                 }
                 first_byte
@@ -270,9 +299,11 @@ impl BLUENRGM0A {
                 let dummy_code = [0xFFu8];
                 if spi.blocking_transfer(&mut code_byte, &dummy_code).is_err() {
                     warn!("Failed to read event code");
+                    cs.set_high();
                     return None;
                 }
                 if event.push(code_byte[0]).is_err() {
+                    cs.set_high();
                     return None;
                 }
                 code_byte[0]
@@ -283,11 +314,13 @@ impl BLUENRGM0A {
             let dummy_len = [0xFFu8];
             if spi.blocking_transfer(&mut len_byte, &dummy_len).is_err() {
                 warn!("Failed to read parameter length");
+                cs.set_high();
                 return None;
             }
             let param_len = len_byte[0] as usize;
             
             if event.push(len_byte[0]).is_err() {
+                cs.set_high();
                 return None;
             }
             
@@ -297,12 +330,14 @@ impl BLUENRGM0A {
             // Valid BLE event parameter lengths are typically much smaller
             if param_len == 0xFF || param_len > 250 {
                 warn!("Suspicious param_len: {} (0x{:02X}), event_code=0x{:02X}", param_len, param_len, event_code);
+                cs.set_high();
                 return None;
             }
             
             // Limit to reasonable size (255 bytes max per spec, but we use 255 buffer)
             if param_len > 253 {
                 warn!("Event too large: {} bytes", param_len);
+                cs.set_high();
                 return None; // Too large for our buffer (2 bytes header + params)
             }
             
@@ -313,13 +348,17 @@ impl BLUENRGM0A {
                 let dummy_slice = &dummy_params[..param_len];
                 if spi.blocking_transfer(param_slice, dummy_slice).is_err() {
                     warn!("Failed to read event parameters");
+                    cs.set_high();
                     return None;
                 }
                 if event.extend_from_slice(param_slice).is_err() {
+                    cs.set_high();
                     return None;
                 }
             }
             
+            // CS high after event read complete
+            cs.set_high();
             Some(event)
         } else {
             None
@@ -807,9 +846,10 @@ pub fn aci_gatt_update_char_value(
 pub async fn ble_peripheral_task(
     driver: &'static Mutex<ThreadModeRawMutex, embassy_stm32::spi::Spi<'static, Async, SpiMaster>>,
     rst: &'static Mutex<ThreadModeRawMutex, Output<'static>>,
+    cs: &'static Mutex<ThreadModeRawMutex, Output<'static>>,
     state: &'static Mutex<ThreadModeRawMutex, State>,
 ) {
-    let bluenrg = BLUENRGM0A::new(driver, rst);
+    let bluenrg = BLUENRGM0A::new(driver, rst, cs);
     
     // Reset the module
     bluenrg.reset().await;

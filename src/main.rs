@@ -117,6 +117,7 @@ static SHARED_SPI_BLUENRG: StaticCell<Mutex<ThreadModeRawMutex, Spi<'static, Asy
 static SHARED_DC: StaticCell<Mutex<ThreadModeRawMutex, Output<'static>>> = StaticCell::new();
 static SHARED_RST: StaticCell<Mutex<ThreadModeRawMutex, Output<'static>>> = StaticCell::new();
 static SHARED_NRG_RST: StaticCell<Mutex<ThreadModeRawMutex, Output<'static>>> = StaticCell::new();
+static SHARED_NRG_CS: StaticCell<Mutex<ThreadModeRawMutex, Output<'static>>> = StaticCell::new();
 static SHARED_DMA2_CH1: StaticCell<Mutex<ThreadModeRawMutex, Peri<DMA2_CH1>>> = StaticCell::new();
 static SHARED_DMA1_CH1: StaticCell<Mutex<ThreadModeRawMutex, DMA1_CH1>> = StaticCell::new();
 
@@ -236,11 +237,15 @@ async fn async_main(spawner: Spawner) {
     );
 
     let nrg_rst = Output::new(p.PA15, Level::Low, Speed::VeryHigh);
+    // CS pin for BlueNRG-M0A SPI (PC1)
+    let nrg_cs = Output::new(p.PC1, Level::High, Speed::VeryHigh);
 
     let static_spi1: &'static mut Mutex<ThreadModeRawMutex, Spi<'static, Async, SpiMaster>> =
         SHARED_SPI_BLUENRG.init(Mutex::new(spi_nrg));
     let static_nrg_rst: &'static mut Mutex<ThreadModeRawMutex, Output<'static>> =
         SHARED_NRG_RST.init(Mutex::new(nrg_rst));
+    let static_nrg_cs: &'static mut Mutex<ThreadModeRawMutex, Output<'static>> =
+        SHARED_NRG_CS.init(Mutex::new(nrg_cs));
 
     let mut spi_config = spi::Config::default();
     spi_config.bit_order = spi::BitOrder::MsbFirst;
@@ -338,9 +343,9 @@ async fn async_main(spawner: Spawner) {
     //     .spawn(bluenrgm0a::ble_peripheral_task(
     //         static_spi1,
     //         static_nrg_rst,
+    //         static_nrg_cs,
     //         &STATE,
-    //     ))
-    //     .unwrap();
+    //     ).expect("Failed to spawn BLE peripheral task"));
     
     // spawner.spawn(no_interaction_task()).unwrap();
     let usb = p.USB_OTG_FS;
@@ -375,15 +380,17 @@ async fn async_main(spawner: Spawner) {
 
     cs.set_low();
 
-    spawner.spawn(batt_voltage_monitor_task(
-        p.PC3,
-        p.PC0,
-        p.PC5,
-        p.PC2,
-        p.ADC1,
-        p.PC1,
-        &STATE,
-    ).expect("Failed to spawn Battery voltage monitor task"));
+    // Battery monitor task commented out - PC1 is now used for BlueNRG-M0A CS
+    // TODO: Change battery monitor to use a different ADC pin (PC1 is now CS for BlueNRG-M0A)
+    // spawner.spawn(batt_voltage_monitor_task(
+    //     p.PC3,
+    //     p.PC0,
+    //     p.PC5,
+    //     p.PC2,
+    //     p.ADC1,
+    //     p.PC1,  // <-- This pin is now used for BlueNRG-M0A CS
+    //     &STATE,
+    // ).expect("Failed to spawn Battery voltage monitor task"));
 
     // spawner.spawn(air_quality_request_task(
     //     p.USART1,

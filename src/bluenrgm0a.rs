@@ -42,159 +42,119 @@ impl BLUENRGM0A {
     /// Test basic SPI communication with the BlueNRG-M0A module
     /// This verifies that the module is responding before attempting BLE initialization
     pub async fn test_communication(&self) -> Result<bool, AciError> {
-        let mut cs = self.cs.try_lock().unwrap();
-        for _ in 0..1000 {
-            Timer::after_millis(1).await;
-            cs.set_low();
-            Timer::after_millis(1).await;
-            cs.set_high();
+        info!("Testing BlueNRG-M0A communication...");
+        // Poll SPI header multiple times to check for proper response
+        let mut ready_count = 0;
+        let mut write_size_samples = [0u8; 20];
+        let mut read_size_samples = [0u8; 20];
+        
+        for i in 0..20 {
+            let (spi_ready, write_size, read_size) = self.read_status();
+            write_size_samples[i] = write_size;
+            read_size_samples[i] = read_size;
+            
+            if spi_ready == 0x02 {
+                ready_count += 1;
+                info!("Status sample {}: SPI_READY=0x{:02X}, write_buffer={}, read_buffer={}", 
+                      i, spi_ready, write_size, read_size);
+            } else {
+                warn!("Status sample {}: SPI_READY=0x{:02X} (not ready), write_buffer={}, read_buffer={}", 
+                      i, spi_ready, write_size, read_size);
+            }
+            
+            Timer::after_millis(50).await;
         }
-        // info!("Testing BlueNRG-M0A communication...");
         
-        // // Read status multiple times to check for any response
-        // let mut status_samples = [0u8; 20];
-        // let mut non_zero_count = 0;
-        // let mut ready_count = 0;
+        info!("Communication test results:");
+        info!("  Total samples: 20");
+        info!("  SPI_READY=0x02 count: {}", ready_count);
+        info!("  Write buffer sizes: {:?}", write_size_samples);
+        info!("  Read buffer sizes: {:?}", read_size_samples);
         
-        // for i in 0..20 {
-        //     let (status, first_byte) = self.read_status();
-        //     status_samples[i] = status;
-            
-        //     if status != 0x00 {
-        //         non_zero_count += 1;
-        //         info!("Status sample {}: 0x{:02X} (bits: ready={}, event={})", 
-        //               i, status, (status & 0x02) != 0, (status & 0x01) != 0);
-                
-        //         if (status & 0x02) != 0 {
-        //             ready_count += 1;
-        //         }
-                
-        //         if let Some(byte) = first_byte {
-        //             info!("  First event byte: 0x{:02X}", byte);
-        //         }
-        //     }
-            
-        //     Timer::after_millis(50).await;
-        // }
+        // Check if module ever becomes ready
+        if ready_count == 0 {
+            error!("No SPI_READY=0x02 response from BlueNRG-M0A");
+            error!("Possible issues:");
+            error!("  1. CS (chip select) not controlled properly");
+            error!("  2. SPI wiring incorrect (MISO not connected)");
+            error!("  3. Module not powered");
+            error!("  4. Module not responding after reset");
+            error!("  5. SPI mode/polarity/phase incorrect");
+            return Ok(false);
+        }
         
-        // info!("Communication test results:");
-        // info!("  Total samples: 20");
-        // info!("  Non-zero status bytes: {}", non_zero_count);
-        // info!("  Ready status (bit 1 set): {}", ready_count);
-        // // info!("  Status samples: {:X?}", status_samples);
-        
-        // // Check if we're getting any response
-        // if non_zero_count == 0 {
-        //     error!("No response from BlueNRG-M0A - all status bytes are 0x00");
-        //     error!("Possible issues:");
-        //     error!("  1. CS (chip select) not controlled");
-        //     error!("  2. SPI wiring incorrect (MISO not connected)");
-        //     error!("  3. Module not powered");
-        //     error!("  4. Module not responding after reset");
-        //     return Ok(false);
-        // }
-        
-        // // Check if module ever becomes ready
-        // if ready_count == 0 {
-        //     warn!("Module responding but never reports ready status");
-        //     warn!("Status bytes received but bit 1 (ready) never set");
-        //     warn!("Module may need more time to initialize");
-            
-        //     // Try waiting a bit longer and checking again
-        //     info!("Waiting additional 500ms and rechecking...");
-        //     Timer::after_millis(500).await;
-            
-        //     for _i in 0..10 {
-        //         let (status, _) = self.read_status();
-        //         if (status & 0x02) != 0 {
-        //             info!("Module now ready! Status: 0x{:02X}", status);
-        //             return Ok(true);
-        //         }
-        //         Timer::after_millis(100).await;
-        //     }
-            
-        //     warn!("Module still not ready after additional wait");
-        //     return Ok(false);
-        // }
-        
-        // info!("Communication test PASSED - module is responding");
+        info!("Communication test PASSED - module is responding correctly");
         Ok(true)
     }
 
-    /// Read status byte from SPI (0x02 = ready for command, 0x00 = not ready)
-    /// Returns: (status_byte, first_event_byte_if_available)
-    /// Note: Reading status may consume the first byte of an event if one is available
-    /// 
-    /// IMPORTANT: BlueNRG-M0A SPI protocol requires CS to be controlled manually.
-    /// The status byte is read by sending a dummy byte (0xFF) while CS is low.
-    fn read_status(&self) -> (u8, Option<u8>) {
+    /// Poll SPI header to check buffer sizes
+    /// Returns: (spi_ready, write_buffer_size, read_buffer_size)
+    /// According to BlueNRG-MS protocol:
+    /// - Master sends: [CTRL (0x0B for read), 0x00, 0x00, 0x00, 0x00]
+    /// - Slave returns: [SPI_READY (0x02), write_buffer_size, 0x00, read_buffer_size, 0x00]
+    /// If SPI_READY is not 0x02, the transaction should be aborted
+    fn poll_spi_header(&self, ctrl_byte: u8) -> Result<(u8, u8, u8), AciError> {
         let mut cs = self.cs.try_lock().unwrap();
         let mut spi = self.driver.try_lock().unwrap();
-        let mut status = [0u8];
-        let dummy = [0xFFu8];
-        
-        // CS must be low during SPI transfer
+    
+        // SPI frame header: [CTRL byte, 0x00, 0x00, 0x00, 0x00]
+        let tx_header = [ctrl_byte, 0x00, 0x00, 0x00, 0x00];
+        let mut rx_header = [0u8; 5];
+    
         cs.set_low();
-        
-        // Send dummy byte to read status
-        let result = match spi.blocking_transfer(&mut status, &dummy) {
-            Ok(_) => {
-                let status_byte = status[0];
-                
-                // Log if we're getting unexpected values
-                if status_byte == 0x00 {
-                    // This might be normal if device isn't ready, but log occasionally
-                    static COUNTER: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
-                    let count = COUNTER.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-                    if count % 1000 == 0 {
-                        warn!("Status byte is 0x00 (device may not be responding or CS not controlled)");
-                    }
-                }
-                
-                // If event is available, the status read might have consumed the first event byte
-                // Read one more byte to check if it's part of an event
-                if (status_byte & 0x01) == 0x01 || status_byte == 0x03 {
-                    let mut first_byte = [0u8];
-                    let dummy_byte = [0xFFu8];
-                    if spi.blocking_transfer(&mut first_byte, &dummy_byte).is_ok() {
-                        (status_byte, Some(first_byte[0]))
-                    } else {
-                        (status_byte, None)
-                    }
-                } else {
-                    (status_byte, None)
-                }
-            }
-            Err(e) => {
-                warn!("SPI transfer error reading status: {:?}", e);
-                (0x00, None)
-            }
-        };
-        
-        // CS high after transfer
+        let transfer_ok = spi.blocking_transfer(&mut rx_header, &tx_header).is_ok();
         cs.set_high();
-        result
+    
+        if !transfer_ok {
+            return Err(AciError::SpiError);
+        }
+    
+        let spi_ready = rx_header[0];
+        let write_buffer_size = rx_header[1];
+        let read_buffer_size = rx_header[3];
+    
+        // Check if SPI is ready (must be 0x02)
+        if spi_ready != 0x02 {
+            warn!("SPI not ready: 0x{:02X} (expected 0x02)", spi_ready);
+            return Err(AciError::InvalidResponse);
+        }
+    
+        Ok((spi_ready, write_buffer_size, read_buffer_size))
     }
 
-    /// Wait for module to be ready (status = 0x02)
+    /// Read status byte from SPI (0x02 = ready for command)
+    /// Returns: (spi_ready, write_buffer_size, read_buffer_size)
+    /// This is a convenience wrapper around poll_spi_header with CTRL=0x0B (read)
+    fn read_status(&self) -> (u8, u8, u8) {
+        match self.poll_spi_header(0x0B) {
+            Ok((ready, write_size, read_size)) => (ready, write_size, read_size),
+            Err(_) => (0x00, 0x00, 0x00),
+        }
+    }
+    
+
+    /// Wait for module to be ready (SPI_READY = 0x02)
     async fn wait_ready(&self) {
         let mut attempts = 0;
         loop {
-            let (status, _first_byte) = self.read_status();
-            // Status byte: bit 1 = ready for command (0x02)
-            // Some implementations use: 0x02 = ready, 0x03 = ready + event available
-            if (status & 0x02) == 0x02 || status == 0x02 || status == 0x03 {
+            let (spi_ready, _write_size, _read_size) = self.read_status();
+            // SPI_READY must be exactly 0x02 to indicate ready
+            if spi_ready == 0x02 {
                 break;
             }
             attempts += 1;
             if attempts % 100 == 0 {
-                warn!("Waiting for ready, status=0x{:02X}, attempts={}", status, attempts);
+                warn!("Waiting for ready, spi_ready=0x{:02X}, attempts={}", spi_ready, attempts);
             }
             Timer::after_millis(1).await;
         }
     }
 
     /// Send a command packet and wait for response
+    /// Implements BlueNRG-MS SPI protocol:
+    /// 1. Send header with CTRL=0x0A (write) + command data in one transaction
+    /// 2. Check SPI_READY and write_buffer_size from header response
+    /// 3. Verify command fits within write_buffer_size
     async fn send_command(&self, cmd: &[u8]) -> Result<(), AciError> {
         self.wait_ready().await;
         
@@ -206,14 +166,42 @@ impl BLUENRGM0A {
         
         info!("Sending command: opcode=0x{:04X}, len={}", opcode, cmd.len());
         
-        // Send command - CS must be low during transfer
+        // Send header + command data in a single SPI transaction
+        // Format: [CTRL (0x0A), 0x00, 0x00, 0x00, 0x00] + cmd_data
         {
             let mut cs = self.cs.try_lock().unwrap();
             let mut spi = self.driver.try_lock().unwrap();
+            
+            // Build complete frame: header + command data
+            let mut tx_frame = heapless::Vec::<u8, 260>::new();
+            tx_frame.push(0x0A).map_err(|_| AciError::TooLarge)?; // CTRL byte for write
+            tx_frame.push(0x00).map_err(|_| AciError::TooLarge)?; // Dummy byte 1
+            tx_frame.push(0x00).map_err(|_| AciError::TooLarge)?; // Dummy byte 2
+            tx_frame.push(0x00).map_err(|_| AciError::TooLarge)?; // Dummy byte 3
+            tx_frame.push(0x00).map_err(|_| AciError::TooLarge)?; // Dummy byte 4
+            tx_frame.extend_from_slice(cmd).map_err(|_| AciError::TooLarge)?; // Command data
+            
+            // Receive header response + dummy bytes for command data
+            let mut rx_frame = heapless::Vec::<u8, 260>::new();
+            rx_frame.resize(5 + cmd.len(), 0).map_err(|_| AciError::TooLarge)?;
+            
             cs.set_low();
-            let result = spi.blocking_write(cmd).map_err(|_| AciError::SpiError);
+            let result = spi.blocking_transfer(rx_frame.as_mut_slice(), tx_frame.as_slice()).map_err(|_| AciError::SpiError);
             cs.set_high();
             result?;
+            
+            // Check SPI_READY from header response (must be 0x02)
+            if rx_frame[0] != 0x02 {
+                warn!("SPI not ready after command send: 0x{:02X}", rx_frame[0]);
+                return Err(AciError::InvalidResponse);
+            }
+            
+            // Check write_buffer_size to ensure command was accepted
+            let write_buffer_size = rx_frame[1];
+            if cmd.len() > write_buffer_size as usize {
+                warn!("Command may be too large: {} bytes, write_buffer_size={}", cmd.len(), write_buffer_size);
+                // Note: We already sent it, but log a warning
+            }
         }
         
         // Small delay to allow command to be processed
@@ -233,6 +221,7 @@ impl BLUENRGM0A {
     }
     
     /// Send a command and return the response data
+    /// Implements BlueNRG-MS SPI protocol similar to send_command
     async fn send_command_with_response(&self, cmd: &[u8]) -> Result<heapless::Vec<u8, 255>, AciError> {
         self.wait_ready().await;
         
@@ -242,14 +231,42 @@ impl BLUENRGM0A {
         }
         let opcode = cmd[0] as u16 | ((cmd[1] as u16) << 8);
         
-        // Send command - CS must be low during transfer
+        // Send header + command data in a single SPI transaction
+        // Format: [CTRL (0x0A), 0x00, 0x00, 0x00, 0x00] + cmd_data
         {
             let mut cs = self.cs.try_lock().unwrap();
             let mut spi = self.driver.try_lock().unwrap();
+            
+            // Build complete frame: header + command data
+            let mut tx_frame = heapless::Vec::<u8, 260>::new();
+            tx_frame.push(0x0A).map_err(|_| AciError::TooLarge)?; // CTRL byte for write
+            tx_frame.push(0x00).map_err(|_| AciError::TooLarge)?; // Dummy byte 1
+            tx_frame.push(0x00).map_err(|_| AciError::TooLarge)?; // Dummy byte 2
+            tx_frame.push(0x00).map_err(|_| AciError::TooLarge)?; // Dummy byte 3
+            tx_frame.push(0x00).map_err(|_| AciError::TooLarge)?; // Dummy byte 4
+            tx_frame.extend_from_slice(cmd).map_err(|_| AciError::TooLarge)?; // Command data
+            
+            // Receive header response + dummy bytes for command data
+            let mut rx_frame = heapless::Vec::<u8, 260>::new();
+            rx_frame.resize(5 + cmd.len(), 0).map_err(|_| AciError::TooLarge)?;
+            
             cs.set_low();
-            let result = spi.blocking_write(cmd).map_err(|_| AciError::SpiError);
+            let result = spi.blocking_transfer(rx_frame.as_mut_slice(), tx_frame.as_slice()).map_err(|_| AciError::SpiError);
             cs.set_high();
             result?;
+            
+            // Check SPI_READY from header response (must be 0x02)
+            if rx_frame[0] != 0x02 {
+                warn!("SPI not ready after command send: 0x{:02X}", rx_frame[0]);
+                return Err(AciError::InvalidResponse);
+            }
+            
+            // Check write_buffer_size to ensure command was accepted
+            let write_buffer_size = rx_frame[1];
+            if cmd.len() > write_buffer_size as usize {
+                warn!("Command may be too large: {} bytes, write_buffer_size={}", cmd.len(), write_buffer_size);
+                // Note: We already sent it, but log a warning
+            }
         }
         
         // Small delay to allow command to be processed
@@ -266,103 +283,92 @@ impl BLUENRGM0A {
         Ok(data)
     }
 
-    /// Read event packet
+    /// Read event packet using BlueNRG-MS SPI protocol
     /// Format per UM1865: [Event Code (1 byte), Parameter Length (1 byte), Parameters...]
-    /// Note: Some BlueNRG implementations may use different formats
     async fn read_event(&self) -> Option<heapless::Vec<u8, 255>> {
-        let (status, first_byte_opt) = self.read_status();
-        // Status byte interpretation:
-        // Bit 0: Data available (event ready) - 0x01
-        // Bit 1: Ready to receive command - 0x02
-        // 0x03 = both ready and event available
-        // Some implementations: 0x02 = ready, 0x03 = ready + event
-        if (status & 0x01) == 0x01 || status == 0x03 {
-            // Event available
-            let mut cs = self.cs.try_lock().unwrap();
-            let mut spi = self.driver.try_lock().unwrap();
-            
-            // CS must be low during entire event read
-            cs.set_low();
-            
-            let mut event = heapless::Vec::<u8, 255>::new();
-            
-            // If we got a first byte from status read, use it
-            let event_code = if let Some(first_byte) = first_byte_opt {
-                if event.push(first_byte).is_err() {
-                    cs.set_high();
-                    return None;
-                }
-                first_byte
-            } else {
-                // Read event code
-                let mut code_byte = [0u8];
-                let dummy_code = [0xFFu8];
-                if spi.blocking_transfer(&mut code_byte, &dummy_code).is_err() {
-                    warn!("Failed to read event code");
-                    cs.set_high();
-                    return None;
-                }
-                if event.push(code_byte[0]).is_err() {
-                    cs.set_high();
-                    return None;
-                }
-                code_byte[0]
-            };
-            
-            // Read parameter length
-            let mut len_byte = [0u8];
-            let dummy_len = [0xFFu8];
-            if spi.blocking_transfer(&mut len_byte, &dummy_len).is_err() {
-                warn!("Failed to read parameter length");
-                cs.set_high();
-                return None;
-            }
-            let param_len = len_byte[0] as usize;
-            
-            if event.push(len_byte[0]).is_err() {
-                cs.set_high();
-                return None;
-            }
-            
-            info!("Event header: code=0x{:02X}, param_len={}", event_code, param_len);
-            
-            // Check if param_len looks valid (0xFF might indicate we're reading wrong format)
-            // Valid BLE event parameter lengths are typically much smaller
-            if param_len == 0xFF || param_len > 250 {
-                warn!("Suspicious param_len: {} (0x{:02X}), event_code=0x{:02X}", param_len, param_len, event_code);
-                cs.set_high();
-                return None;
-            }
-            
-            // Limit to reasonable size (255 bytes max per spec, but we use 255 buffer)
-            if param_len > 253 {
-                warn!("Event too large: {} bytes", param_len);
-                cs.set_high();
-                return None; // Too large for our buffer (2 bytes header + params)
-            }
-            
-            if param_len > 0 {
-                let mut params = [0u8; 253];
-                let param_slice = &mut params[..param_len];
-                let dummy_params = [0xFFu8; 253];
-                let dummy_slice = &dummy_params[..param_len];
-                if spi.blocking_transfer(param_slice, dummy_slice).is_err() {
-                    warn!("Failed to read event parameters");
-                    cs.set_high();
-                    return None;
-                }
-                if event.extend_from_slice(param_slice).is_err() {
-                    cs.set_high();
-                    return None;
-                }
-            }
-            
-            // CS high after event read complete
-            cs.set_high();
-            Some(event)
-        } else {
-            None
+        // Step 1: Poll header with CTRL=0x0B (read) to check read_buffer_size
+        let (_spi_ready, _write_buffer_size, read_buffer_size) = match self.poll_spi_header(0x0B) {
+            Ok(result) => result,
+            Err(_) => return None,
+        };
+        
+        // Check if there's data to read
+        if read_buffer_size == 0 {
+            return None;
         }
+        
+        // Step 2: Read the event data
+        // According to protocol, we send header + read data in one transaction
+        // But since we already sent the header, we need to read the data
+        // Actually, we should send header + dummy bytes for reading
+        let mut cs = self.cs.try_lock().unwrap();
+        let mut spi = self.driver.try_lock().unwrap();
+        
+        // Build frame: [CTRL (0x0B), 0x00, 0x00, 0x00, 0x00] + dummy bytes for reading
+        let mut tx_frame = heapless::Vec::<u8, 260>::new();
+        if tx_frame.push(0x0B).is_err() { return None; } // CTRL byte for read
+        if tx_frame.push(0x00).is_err() { return None; } // Dummy byte 1
+        if tx_frame.push(0x00).is_err() { return None; } // Dummy byte 2
+        if tx_frame.push(0x00).is_err() { return None; } // Dummy byte 3
+        if tx_frame.push(0x00).is_err() { return None; } // Dummy byte 4
+        
+        // Add dummy bytes for reading event data (up to read_buffer_size)
+        let read_len = read_buffer_size.min(250) as usize; // Limit to reasonable size
+        for _ in 0..read_len {
+            if tx_frame.push(0xFF).is_err() { return None; } // Dummy bytes for reading
+        }
+        
+        // Receive header + event data
+        let mut rx_frame = heapless::Vec::<u8, 260>::new();
+        if rx_frame.resize(5 + read_len, 0).is_err() { return None; }
+        
+        cs.set_low();
+        let transfer_ok = spi.blocking_transfer(rx_frame.as_mut_slice(), tx_frame.as_slice()).is_ok();
+        cs.set_high();
+        
+        if !transfer_ok {
+            warn!("Failed to read event data");
+            return None;
+        }
+        
+        // Check SPI_READY from header response
+        if rx_frame[0] != 0x02 {
+            warn!("SPI not ready during event read: 0x{:02X}", rx_frame[0]);
+            return None;
+        }
+        
+        // Extract event data (skip the 5-byte header)
+        let event_data = &rx_frame[5..];
+        
+        if event_data.is_empty() {
+            return None;
+        }
+        
+        // Parse event: [Event Code, Parameter Length, Parameters...]
+        let event_code = event_data[0];
+        if event_data.len() < 2 {
+            warn!("Event data too short: {} bytes", event_data.len());
+            return None;
+        }
+        
+        let param_len = event_data[1] as usize;
+        
+        // Validate parameter length
+        if param_len > 250 || event_data.len() < 2 + param_len {
+            warn!("Invalid event: code=0x{:02X}, param_len={}, data_len={}", 
+                  event_code, param_len, event_data.len());
+            return None;
+        }
+        
+        // Build event packet
+        let mut event = heapless::Vec::<u8, 255>::new();
+        if event.extend_from_slice(&event_data[..2 + param_len]).is_err() {
+            warn!("Event too large for buffer");
+            return None;
+        }
+        
+        info!("Event header: code=0x{:02X}, param_len={}", event_code, param_len);
+        Some(event)
     }
     
     /// Wait for and read a Command Complete event
@@ -852,8 +858,8 @@ pub async fn ble_peripheral_task(
     let bluenrg = BLUENRGM0A::new(driver, rst, cs);
     
     // Reset the module
-    bluenrg.reset().await;
-    Timer::after_millis(500).await; // Wait for module to stabilize
+    // bluenrg.reset().await;
+    // Timer::after_millis(500).await; // Wait for module to stabilize
     
     // Test basic communication before attempting BLE initialization
     // match bluenrg.test_communication().await {
@@ -872,11 +878,11 @@ pub async fn ble_peripheral_task(
     //     }
     // }
 
-    loop {
-        bluenrg.reset().await;
-        bluenrg.test_communication().await;
-        Timer::after_millis(100).await;
-    }
+    // loop {
+    //     // bluenrg.reset().await;
+    //     bluenrg.test_communication().await;
+    //     Timer::after_millis(100).await;
+    // }
     
     // Initialize BLE stack
     let (service_handle, char_handle) = match bluenrg.init_ble().await {

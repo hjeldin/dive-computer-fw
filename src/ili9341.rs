@@ -402,12 +402,10 @@ pub async fn screen_task(
     lcd: embassy_stm32::spi::Spi<'static, Async, Master>,
     dc: &'static Mutex<ThreadModeRawMutex, Output<'static>>,
     rst: &'static Mutex<ThreadModeRawMutex, Output<'static>>,
+    state: &'static Mutex<ThreadModeRawMutex, crate::state::State> 
 ) {
-    defmt::info!("ILI9341 task");
     let mut ili9341_lcd = ILI9341::new(lcd, dc, rst, LcdOrientation::Rotate90);
-    defmt::info!("ILI9341 init");
     ili9341_lcd.init().await;
-    defmt::info!("ILI9341 init done");
 
     let scene_manager = unsafe { &mut *(&raw mut scene_manager::INSTANCE) };
     scene_manager.add_scene(stm_graphics::startup::build_startup());
@@ -426,7 +424,7 @@ pub async fn screen_task(
     let _ = r = battery_indicator.draw(&mut ili9341_lcd);
     let _ = scene_manager.draw_active_scene(&mut ili9341_lcd);
 
-    let state = stm_graphics::State {
+    let mut gfx_state = stm_graphics::State {
         pressure: 12.0,
         temperature: 35.0,
         datetime: DateTime {
@@ -443,7 +441,7 @@ pub async fn screen_task(
     };
 
     loop {
-        // let state = crate::STATE.lock().await;
+        let mut state = state.lock().await;
         let mut refresh = LCD_REFRESH.load(Ordering::Relaxed);
         let next_pressed = LCD_NEXT_ITEM.load(Ordering::Relaxed);
         if next_pressed {
@@ -464,7 +462,13 @@ pub async fn screen_task(
             LCD_ENTER_ITEM.store(false, Ordering::Relaxed);
             refresh = true;
         }
-        scene_manager.get_active_scene().unwrap().update(&state);
+        
+        gfx_state.pressure = state.pressure;
+        gfx_state.temperature = state.temperature;
+        gfx_state.battery = (state.batt_voltage / 4.2 * 100.0) as u8;
+
+        scene_manager.get_active_scene().unwrap().update(&gfx_state);
+        battery_indicator.set_level(gfx_state.battery);
         if refresh {
             let _ = scene_manager.draw_active_scene(&mut ili9341_lcd);
             LCD_REFRESH.store(false, Ordering::Relaxed);

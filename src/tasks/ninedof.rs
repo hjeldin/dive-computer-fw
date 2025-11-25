@@ -11,12 +11,16 @@ use nalgebra::Vector3;
 use crate::state;
 
 #[embassy_executor::task]
-pub async fn ninedof_task(mut sixdof_driver: I2CDriver<'static>, mut threedof_driver: I2CDriver<'static>, state: &'static Mutex<ThreadModeRawMutex, state::State>) {
+pub async fn ninedof_task(
+    mut sixdof_driver: I2CDriver<'static>, 
+    mut threedof_driver: I2CDriver<'static>, 
+    state: &'static Mutex<ThreadModeRawMutex, state::State>
+) {
     let mut sixdof_sensor = Ism330Dhcx::new(&mut sixdof_driver).await.unwrap();
     let mut threedof_sensor = MMC5983::new(threedof_driver, Delay, 0x30);
 
     // let mut ahrs = Madgwick::default();
-    let mut ahrs = Madgwick::new(0.01, 0.04);
+    let mut ahrs = Madgwick::new(1.0, 0.04);
     // let mut threedof_sensor = MMC5983::new(threedof_driver, Delay);
 
     boot_6dof_sensor(&mut sixdof_sensor, &mut sixdof_driver).await;
@@ -25,7 +29,7 @@ pub async fn ninedof_task(mut sixdof_driver: I2CDriver<'static>, mut threedof_dr
     const G_TO_MPS2: f64 = 9.80665; // Standard gravity in m/s²
     
     loop {
-        Timer::after_millis(100).await;
+        Timer::after_millis(1000).await;
         {
             let accel_data = sixdof_sensor.get_accelerometer(&mut sixdof_driver).await.unwrap();
             let gyro_data = sixdof_sensor.get_gyroscope(&mut sixdof_driver).await.unwrap();
@@ -66,17 +70,17 @@ pub async fn ninedof_task(mut sixdof_driver: I2CDriver<'static>, mut threedof_dr
             magnetometer_normalized.z = -magnetometer_normalized.z;
             magnetometer_normalized = magnetometer_normalized.normalize();
 
-            defmt::info!("Temp: {}", temp.unwrap_or(0.0));
-            defmt::info!("Accel (x, y, z): {}, {}, {}", accelerometer.x, accelerometer.y, accelerometer.z);
-            defmt::info!("Gyro (x, y, z): {}, {}, {}", gyroscope.x, gyroscope.y, gyroscope.z);
-            defmt::info!("Mag (x, y, z, norm): {}, {}, {}, {}", magnetometer_normalized.x, magnetometer_normalized.y, magnetometer_normalized.z, magnetometer_normalized.magnitude());
-            defmt::info!("Mag heading: {}", calculate_heading(magnetometer_normalized.x, magnetometer_normalized.y) as f32);
+            // defmt::info!("Temp: {}", temp.unwrap_or(0.0));
+            // defmt::info!("Accel (x, y, z): {}, {}, {}", accelerometer.x, accelerometer.y, accelerometer.z);
+            // defmt::info!("Gyro (x, y, z): {}, {}, {}", gyroscope.x, gyroscope.y, gyroscope.z);
+            // defmt::info!("Mag (x, y, z, norm): {}, {}, {}, {}", magnetometer_normalized.x, magnetometer_normalized.y, magnetometer_normalized.z, magnetometer_normalized.magnitude());
+            // defmt::info!("Mag heading: {}", calculate_heading(magnetometer_normalized.x, magnetometer_normalized.y) as f32);
 
             accelerometer = accelerometer.normalize();
-            let quaternion = ahrs.update(&gyroscope, &accelerometer, &magnetometer_normalized).unwrap();
-            // let quaternion = ahrs.update_imu(&gyroscope, &accelerometer).unwrap();
-            let euler = quaternion.euler_angles();
-            defmt::info!("Roll: {}, Pitch: {}, Yaw: {}", euler.0, euler.1, euler.2);
+            // let quaternion = ahrs.update(&gyroscope, &accelerometer, &magnetometer_normalized).unwrap();
+            // // let quaternion = ahrs.update_imu(&gyroscope, &accelerometer).unwrap();
+            // let euler = quaternion.euler_angles();
+            // defmt::info!("Roll: {}, Pitch: {}, Yaw: {}", euler.0, euler.1, euler.2);
         }
     }
 }

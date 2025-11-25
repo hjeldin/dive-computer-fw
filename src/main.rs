@@ -5,7 +5,7 @@ use core::arch::asm;
 use crate::i2cdriver::I2CDriver;
 use crate::tasks::buzzer::buzzer_pwm_task;
 use crate::tasks::enter_button::btn_enter_task;
-// use crate::tasks::lcd_brightness::lcd_brightness_task;
+use crate::tasks::lcd_brightness::lcd_brightness_task;
 use crate::tasks::next_button::btn_right_task;
 use crate::tasks::ninedof::ninedof_task;
 use crate::tasks::no_interaction::no_interaction_task;
@@ -26,7 +26,7 @@ use embassy_stm32::spi::{self, Spi};
 use embassy_stm32::spi::mode::Master as SpiMaster;
 use embassy_stm32::i2c::mode::Master as I2cMaster;
 use embassy_stm32::time::Hertz;
-use embassy_stm32::{bind_interrupts, pac, peripherals, sdmmc, usb, Peri};
+use embassy_stm32::{bind_interrupts, pac, peripherals, sdmmc, usb, Peri, interrupt};
 use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex;
 use embassy_sync::mutex::Mutex;
 use embassy_time::Timer;
@@ -42,7 +42,7 @@ use crate::tasks::sd_card::sd_card_task;
 // use crate::tasks::usart_hello::usart_hello;
 use crate::tasks::usb_device::usb_device_task;
 use crate::tasks::air_quality_request::air_quality_request_task;
-// use crate::tasks::flash_timestamp::flash_timestamp_task;
+use crate::tasks::flash_timestamp::flash_timestamp_task;
 // use crate::tasks::usb_device::usb_device_task;
 // use embassy_boot_stm32::{AlignedBuffer, BlockingFirmwareState, FirmwareUpdaterConfig};
 // use embassy_usb_dfu::consts::DfuAttributes;
@@ -72,8 +72,9 @@ static LOW_POWER_MODE: AtomicBool = AtomicBool::new(false);
 static RTC: StaticCell<Rtc> = StaticCell::new();
 
 bind_interrupts!(struct Irqs {
-    // EXTI => exti::InterruptHandler<peripherals::EXTI1>;
-    // EXTI4 => exti::InterruptHandler<peripherals::EXTI>;
+    EXTI1 => exti::InterruptHandler<interrupt::typelevel::EXTI1>;
+    EXTI4 => exti::InterruptHandler<interrupt::typelevel::EXTI4>;
+    EXTI15_10 => exti::InterruptHandler<interrupt::typelevel::EXTI15_10>;
     I2C1_EV => i2c::EventInterruptHandler<peripherals::I2C1>;
     I2C1_ER => i2c::ErrorInterruptHandler<peripherals::I2C1>;
     OTG_FS => usb::InterruptHandler<peripherals::USB_OTG_FS>;
@@ -119,7 +120,7 @@ static SHARED_RST: StaticCell<Mutex<ThreadModeRawMutex, Output<'static>>> = Stat
 static SHARED_NRG_RST: StaticCell<Mutex<ThreadModeRawMutex, Output<'static>>> = StaticCell::new();
 static SHARED_NRG_CS: StaticCell<Mutex<ThreadModeRawMutex, Output<'static>>> = StaticCell::new();
 static SHARED_DMA2_CH1: StaticCell<Mutex<ThreadModeRawMutex, Peri<DMA2_CH1>>> = StaticCell::new();
-static SHARED_DMA1_CH1: StaticCell<Mutex<ThreadModeRawMutex, DMA1_CH1>> = StaticCell::new();
+static SHARED_DMA1_CH1: StaticCell<Mutex<ThreadModeRawMutex, Peri<DMA1_CH1>>> = StaticCell::new();
 
 static SHARED_SDMMC1: StaticCell<Mutex<ThreadModeRawMutex, Sdmmc<'static, SDMMC1>>> = StaticCell::new();
 
@@ -219,7 +220,7 @@ async fn async_main(spawner: Spawner) {
 
     let mut spi_nrg_config = spi::Config::default();
     spi_nrg_config.bit_order = spi::BitOrder::MsbFirst;
-    spi_nrg_config.frequency = Hertz(4_000_000);
+    spi_nrg_config.frequency = Hertz(2_000_000);
     // BlueNRG-M0A uses SPI Mode 0 (CPOL=0, CPHA=0)
     // Mode 0: Clock idle low, data sampled on rising edge
     // Explicitly set mode to ensure proper clock/data synchronization
@@ -238,7 +239,7 @@ async fn async_main(spawner: Spawner) {
 
     let nrg_rst = Output::new(p.PA15, Level::Low, Speed::VeryHigh);
     // CS pin for BlueNRG-M0A SPI (PC1)
-    let nrg_cs = Output::new(p.PC1, Level::High, Speed::VeryHigh);
+    let nrg_cs = Output::new(p.PC4, Level::High, Speed::VeryHigh);
 
     let static_spi1: &'static mut Mutex<ThreadModeRawMutex, Spi<'static, Async, SpiMaster>> =
         SHARED_SPI_BLUENRG.init(Mutex::new(spi_nrg));
@@ -288,14 +289,16 @@ async fn async_main(spawner: Spawner) {
     //
     // let mut button = ExtiInput::new(p.PC13, p.EXTI13, Pull::Up);
 
-    // let button_right = ExtiInput::new(p.PA1, p.EXTI1, Pull::Up, Irqs::EXTI);
+    let button_right = ExtiInput::new(p.PA1, p.EXTI1, Pull::Up, Irqs);
 
-    // let button_enter = ExtiInput::new(p.PA4, p.EXTI4, Pull::Up, Irqs::EXTI);
+    let button_enter = ExtiInput::new(p.PA4, p.EXTI4, Pull::Up, Irqs);
+    
+    let brightness_button = ExtiInput::new(p.PC13, p.EXTI13, Pull::Up, Irqs);
     //
     let static_dma_buzzer: &mut Mutex<ThreadModeRawMutex, Peri<DMA2_CH1>> =
         SHARED_DMA2_CH1.init(Mutex::new(p.DMA2_CH1));
-    // let static_dma1_ch1: &mut Mutex<ThreadModeRawMutex, DMA1_CH1> =
-    //     SHARED_DMA1_CH1.init(Mutex::new(p.DMA1_CH1));
+    let static_dma1_ch1: &mut Mutex<ThreadModeRawMutex, Peri<DMA1_CH1>> =
+        SHARED_DMA1_CH1.init(Mutex::new(p.DMA1_CH1));
 
 
     let static_sdmmc1: &mut Mutex<ThreadModeRawMutex, Sdmmc<'static, SDMMC1>> =
@@ -316,21 +319,18 @@ async fn async_main(spawner: Spawner) {
     // spawner.spawn(ens160::ens_task(ens160_driver)).unwrap();
     // spawner.spawn(bmp280::bmp_task(bmp280_driver)).unwrap();
     spawner.spawn(ms5837::ms5837_task(ms5837_driver, &STATE).expect("Failed to spawn MS5837 task"));
-    // spawner
-    //     .spawn(ili9341::screen_task(spi, static_dc, static_rst))
-    //     .unwrap();
+    spawner
+        .spawn(ili9341::screen_task(spi, static_dc, static_rst, &STATE).expect("Failed to spawn ILI9341 task"));
     // // spawner.spawn(decotask::deco_task()).unwrap();
-    // spawner.spawn(btn_right_task(button_right).expect("Failed to spawn Right button task"));
-    // spawner.spawn(btn_enter_task(button_enter).expect("Failed to spawn Enter button task"));
-    // spawner
-    //     .spawn(lcd_brightness_task(
-    //         p.PC13,
-    //         p.EXTI13,
-    //         p.PA10,
-    //         p.TIM1,
-    //         static_dma1_ch1
-    //     ))
-    //     .unwrap();
+    spawner.spawn(btn_right_task(button_right).expect("Failed to spawn Right button task"));
+    spawner.spawn(btn_enter_task(button_enter).expect("Failed to spawn Enter button task"));
+    spawner
+        .spawn(lcd_brightness_task(
+            brightness_button,
+            p.PA10,
+            p.TIM1,
+            static_dma1_ch1
+        ).expect("Failed to spawn LCD brightness task"));
     spawner
         .spawn(buzzer_pwm_task(
             p.PC7,
@@ -357,16 +357,16 @@ async fn async_main(spawner: Spawner) {
     
     // Initialize QUADSPI flash timestamp task
     // QUADSPI pins: PA6 (IO3), PA7 (IO2), PB0 (IO1), PB1 (IO0), PB10 (CLK), PB11 (CS)
-    // spawner.spawn(flash_timestamp_task(
-    //     p.QUADSPI,
-    //     p.PB1,  // IO0
-    //     p.PB0,  // IO1
-    //     p.PA7,  // IO2
-    //     p.PA6,  // IO3
-    //     p.PB10, // CLK
-    //     p.PB11, // CS
-    //     &RTC,
-    // )).unwrap();
+    spawner.spawn(flash_timestamp_task(
+        p.QUADSPI,
+        p.PB1,  // IO0
+        p.PB0,  // IO1
+        p.PA7,  // IO2
+        p.PA6,  // IO3
+        p.PB10, // CLK
+        p.PB11, // NSS (Chip Select)
+        &RTC,
+    ).expect("Failed to spawn QUADSPI flash timestamp task"));
 
     let ninedof_i2c = I2CDriver::new(
         static_i2c, 
@@ -380,17 +380,15 @@ async fn async_main(spawner: Spawner) {
 
     cs.set_low();
 
-    // Battery monitor task commented out - PC1 is now used for BlueNRG-M0A CS
-    // TODO: Change battery monitor to use a different ADC pin (PC1 is now CS for BlueNRG-M0A)
-    // spawner.spawn(batt_voltage_monitor_task(
-    //     p.PC3,
-    //     p.PC0,
-    //     p.PC5,
-    //     p.PC2,
-    //     p.ADC1,
-    //     p.PC1,  // <-- This pin is now used for BlueNRG-M0A CS
-    //     &STATE,
-    // ).expect("Failed to spawn Battery voltage monitor task"));
+    spawner.spawn(batt_voltage_monitor_task(
+        p.PC3,
+        p.PC0,
+        p.PC5,
+        p.PC2,
+        p.ADC1,
+        p.PC1,
+        &STATE,
+    ).expect("Failed to spawn Battery voltage monitor task"));
 
     // spawner.spawn(air_quality_request_task(
     //     p.USART1,

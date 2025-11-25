@@ -56,6 +56,7 @@ pub async fn batt_voltage_monitor_task(low_batt_pin: Peri<'static, PC3>,
 
         let mut state = state.lock().await;
         state.batt_voltage = voltage_mv;
+        info!("Batt voltage: {}", voltage_mv);
         state.power_good = power_good.is_low();
         state.charge_status = charge_status.is_low();
         state.low_batt = low_batt.is_low();

@@ -5,7 +5,7 @@ use embassy_stm32::Peri;
 use embassy_stm32::peripherals::{ADC1, PC0, PC1, PC2, PC3, PC5};
 use embassy_time::Timer;
 use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex;
-use embassy_sync::mutex::Mutex;
+use embassy_sync::rwlock::RwLock;
 use crate::state;
 
 #[embassy_executor::task]
@@ -15,7 +15,7 @@ pub async fn batt_voltage_monitor_task(low_batt_pin: Peri<'static, PC3>,
                                        bat_mon_en_pin: Peri<'static, PC2>,
                                        adc1: Peri<'static, ADC1>,
                                        mut adc_pin: Peri<'static, PC1>,
-                                       state: &'static Mutex<ThreadModeRawMutex, state::State>,
+                                       state: &'static RwLock<ThreadModeRawMutex, state::State>,
     ) {
     let low_batt = Input::new(low_batt_pin, Pull::Up);
     let power_good = Input::new(power_good_pin, Pull::Up);
@@ -23,9 +23,9 @@ pub async fn batt_voltage_monitor_task(low_batt_pin: Peri<'static, PC3>,
     
     let mut adc_bat_v = Adc::new(adc1);
     let mut bat_mon_en = Output::new(bat_mon_en_pin, Level::Low, Speed::VeryHigh);
-    
+
     let mut vrefint_channel = adc_bat_v.enable_vrefint();
-    
+
     let mut vrefint_sum = 0u32;
     for _ in 0..10 {
         let vref = adc_bat_v.blocking_read(&mut vrefint_channel, SampleTime::CYCLES640_5);
@@ -34,7 +34,7 @@ pub async fn batt_voltage_monitor_task(low_batt_pin: Peri<'static, PC3>,
     }
     let vrefint_cal = (vrefint_sum / 10) as u16;
     info!("VREFINT calibration: {}", vrefint_cal);
-    
+
     let convert_to_millivolts = |sample: f32| {
         // MIN   TYP   MAX
         //1.182 1.212 1.232
@@ -44,17 +44,19 @@ pub async fn batt_voltage_monitor_task(low_batt_pin: Peri<'static, PC3>,
     };
 
     loop {
+
         bat_mon_en.set_high();       
         Timer::after_millis(50).await;
+        info!("Reading battery voltage");
         let measured = adc_bat_v.blocking_read(&mut adc_pin, SampleTime::CYCLES640_5);
-        
+        info!("Measured: {}", measured);
         let voltage_mv = convert_to_millivolts(measured as f32);
         
-        
+        info!("Voltage: {}", voltage_mv);
         bat_mon_en.set_low();
         Timer::after_millis(1000).await;
 
-        let mut state = state.lock().await;
+        let mut state = state.write().await;
         state.batt_voltage = voltage_mv;
         info!("Batt voltage: {}", voltage_mv);
         state.power_good = power_good.is_low();

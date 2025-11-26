@@ -4,7 +4,7 @@ use ahrs::Ahrs;
 use ism330dhcx::{ctrl1xl, ctrl2g, Ism330Dhcx};
 use embassy_time::{Delay, Duration, Instant, Timer};
 use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex;
-use embassy_sync::mutex::Mutex;
+use embassy_sync::rwlock::RwLock;
 use libm::atan2;
 use crate::mmc5983ma::{ContinuousMeasurementFreq, MMC5983, PeriodicSetInterval};
 use nalgebra::Vector3;
@@ -14,7 +14,7 @@ use crate::state;
 pub async fn ninedof_task(
     mut sixdof_driver: I2CDriver<'static>, 
     mut threedof_driver: I2CDriver<'static>, 
-    state: &'static Mutex<ThreadModeRawMutex, state::State>
+    state: &'static RwLock<ThreadModeRawMutex, state::State>
 ) {
     let mut sixdof_sensor = Ism330Dhcx::new(&mut sixdof_driver).await.unwrap();
     let mut threedof_sensor = MMC5983::new(threedof_driver, Delay, 0x30);
@@ -40,22 +40,22 @@ pub async fn ninedof_task(
                 accel_g[1] * G_TO_MPS2,
                 accel_g[2] * G_TO_MPS2,
             ];
-            let mut state = state.lock().await;
-            state.accel_x = accel_mps2[0] as f32;
-            state.accel_y = accel_mps2[1] as f32;
-            state.accel_z = accel_mps2[2] as f32;
-            state.gyro_x = gyro_data.as_rad()[0] as f32;
-            state.gyro_y = gyro_data.as_rad()[1] as f32;
-            state.gyro_z = gyro_data.as_rad()[2] as f32;
-            
             // threedof_sensor.reset().await.unwrap();
             // Timer::after_millis(10).await;
             let mag_data = threedof_sensor.do_measurement_raw().await.unwrap();
-            
-            state.mag_x = mag_data.x as f32;
-            state.mag_y = mag_data.y as f32;
-            state.mag_z = mag_data.z as f32;
-            drop(state);
+
+
+            let mut loc_state = state.write().await;
+            loc_state.accel_x = accel_mps2[0] as f32;
+            loc_state.accel_y = accel_mps2[1] as f32;
+            loc_state.accel_z = accel_mps2[2] as f32;
+            loc_state.gyro_x = gyro_data.as_rad()[0] as f32;
+            loc_state.gyro_y = gyro_data.as_rad()[1] as f32;
+            loc_state.gyro_z = gyro_data.as_rad()[2] as f32;
+            loc_state.mag_x = mag_data.x as f32;
+            loc_state.mag_y = mag_data.y as f32;
+            loc_state.mag_z = mag_data.z as f32;
+            drop(loc_state);
 
             let temp = threedof_sensor.get_temp_c().await.unwrap();
 

@@ -29,6 +29,7 @@ use embassy_stm32::time::Hertz;
 use embassy_stm32::{bind_interrupts, pac, peripherals, sdmmc, usb, Peri, interrupt};
 use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex;
 use embassy_sync::mutex::Mutex;
+use embassy_sync::rwlock::RwLock;
 use embassy_time::Timer;
 use static_cell::{StaticCell};
 use {defmt_rtt as _, panic_probe as _};
@@ -81,7 +82,7 @@ bind_interrupts!(struct Irqs {
     SDMMC1 => sdmmc::InterruptHandler<peripherals::SDMMC1>;
 });
 
-pub static STATE: Mutex<ThreadModeRawMutex, state::State> = Mutex::new(state::State {
+pub static STATE: RwLock<ThreadModeRawMutex, state::State> = RwLock::new(state::State {
     time: [0; 4],
     pressure: 0.0,
     temperature: 0.0,

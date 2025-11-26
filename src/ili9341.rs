@@ -6,7 +6,9 @@ use core::{
 
 use defmt::info;
 use embassy_stm32::{gpio::Output, mode::Async, spi::mode::Master};
-use embassy_sync::{blocking_mutex::raw::ThreadModeRawMutex, mutex::Mutex};
+use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex;
+use embassy_sync::mutex::Mutex;
+use embassy_sync::rwlock::RwLock;
 use embassy_time::{Instant, Timer};
 use ili9341regs::{LcdOrientation, COLUMNS, PAGES};
 use stm_graphics::{scene_manager, Date, DateTime, Time};
@@ -402,7 +404,7 @@ pub async fn screen_task(
     lcd: embassy_stm32::spi::Spi<'static, Async, Master>,
     dc: &'static Mutex<ThreadModeRawMutex, Output<'static>>,
     rst: &'static Mutex<ThreadModeRawMutex, Output<'static>>,
-    state: &'static Mutex<ThreadModeRawMutex, crate::state::State> 
+    state: &'static RwLock<ThreadModeRawMutex, crate::state::State> 
 ) {
     let mut ili9341_lcd = ILI9341::new(lcd, dc, rst, LcdOrientation::Rotate90);
     ili9341_lcd.init().await;
@@ -441,7 +443,10 @@ pub async fn screen_task(
     };
 
     loop {
-        let mut state = state.lock().await;
+        let (pressure, temperature, batt_voltage) = {
+            let state = state.read().await;
+            (state.pressure, state.temperature, state.batt_voltage)
+        };
         let mut refresh = LCD_REFRESH.load(Ordering::Relaxed);
         let next_pressed = LCD_NEXT_ITEM.load(Ordering::Relaxed);
         if next_pressed {
@@ -463,12 +468,16 @@ pub async fn screen_task(
             refresh = true;
         }
         
-        gfx_state.pressure = state.pressure;
-        gfx_state.temperature = state.temperature;
-        gfx_state.battery = (state.batt_voltage / 4.2 * 100.0) as u8;
+        gfx_state.pressure = pressure;
+        gfx_state.temperature = temperature;
+        if((batt_voltage / 4.2 * 255.0) as u8 != gfx_state.battery) {
+            gfx_state.battery = (batt_voltage / 4.2 * 255.0) as u8;
+            battery_indicator.set_level(gfx_state.battery);
+            let _ = battery_indicator.draw(&mut ili9341_lcd);
+            info!("Battery level: {}", gfx_state.battery);
+        }
 
         scene_manager.get_active_scene().unwrap().update(&gfx_state);
-        battery_indicator.set_level(gfx_state.battery);
         if refresh {
             let _ = scene_manager.draw_active_scene(&mut ili9341_lcd);
             LCD_REFRESH.store(false, Ordering::Relaxed);

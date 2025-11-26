@@ -5,6 +5,7 @@ use embassy_stm32::sdmmc::{DataBlock, Sdmmc};
 use embassy_stm32::time::Hertz;
 use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex;
 use embassy_sync::mutex::Mutex;
+use embassy_sync::rwlock::RwLock;
 use embassy_time::{Duration, Timer, WithTimeout};
 use embedded_sdmmc::asynchronous::{Block, BlockCount, BlockDevice, BlockIdx, Mode, VolumeIdx, VolumeManager};
 use crate::state;
@@ -103,7 +104,7 @@ impl<'a> BlockDevice for SDMMCDevice<'a> {
 }
 
 #[embassy_executor::task]
-pub async fn sd_card_task(sdmmc: &'static Mutex<ThreadModeRawMutex, Sdmmc<'static, SDMMC1>>, state: &'static Mutex<ThreadModeRawMutex, state::State>) {
+pub async fn sd_card_task(sdmmc: &'static Mutex<ThreadModeRawMutex, Sdmmc<'static, SDMMC1>>, state: &'static RwLock<ThreadModeRawMutex, state::State>) {
     return;
     let mut device = SDMMCDevice::new(sdmmc);
     device.init().await;
@@ -122,7 +123,7 @@ pub async fn sd_card_task(sdmmc: &'static Mutex<ThreadModeRawMutex, Sdmmc<'stati
 
     loop {
         Timer::after_millis(100).await;
-        let mut state = state.lock().await;
+        let state = state.read().await;
         let mut buf = [0u8; 64];
         let text = format_no_std::show(&mut buf, format_args!("{:.5}\n{:.1}\n", state.pressure, state.temperature)).unwrap();
         file.write(&text.as_bytes()).await.unwrap();

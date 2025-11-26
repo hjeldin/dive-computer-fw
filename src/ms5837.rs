@@ -1,6 +1,7 @@
 use core::sync::atomic::Ordering;
 use defmt::info;
-use embassy_sync::{blocking_mutex::raw::ThreadModeRawMutex, mutex::Mutex};
+use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex;
+use embassy_sync::rwlock::RwLock;
 use embassy_time::Timer;
 use static_cell::StaticCell;
 
@@ -311,7 +312,7 @@ impl<'a> MS5837<'a> {
 #[embassy_executor::task]
 pub async fn ms5837_task(
     sensor: I2CDriver<'static>, 
-    state: &'static Mutex<ThreadModeRawMutex, state::State>
+    state: &'static RwLock<ThreadModeRawMutex, state::State>
 ) {
     let mut ms5837_sensor = MS5837::new(sensor);
     ms5837_sensor.init().await;
@@ -327,7 +328,7 @@ pub async fn ms5837_task(
 
         // info!("Pressure: {}, Temperature: {}", result.0, result.1);
 
-        let mut state = state.lock().await;
+        let mut state = state.write().await;
         state.pressure = result.0;
         state.temperature = result.1;
         // todo: check ascent speed

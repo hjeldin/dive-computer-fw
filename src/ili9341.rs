@@ -470,8 +470,8 @@ pub async fn screen_task(
         
         gfx_state.pressure = pressure;
         gfx_state.temperature = temperature;
-        if((batt_voltage / 4.2 * 255.0) as u8 != gfx_state.battery) {
-            gfx_state.battery = (batt_voltage / 4.2 * 255.0) as u8;
+        if(((batt_voltage - 3.2) / (4.2 - 3.2) * 255.0) as u8 != gfx_state.battery) {
+            gfx_state.battery = ((batt_voltage - 3.2) / (4.2 - 3.2) * 255.0) as u8;
             battery_indicator.set_level(gfx_state.battery);
             let _ = battery_indicator.draw(&mut ili9341_lcd);
             info!("Battery level: {}", gfx_state.battery);

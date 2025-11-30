@@ -324,9 +324,6 @@ pub async fn ms5837_task(
 
         let _depth = ms5837_sensor.depth(1.0).await;
         let _altitude = ms5837_sensor.altitude().await;
-        // info!("Altitude: {}, Depth: {}", altitude, depth);
-
-        // info!("Pressure: {}, Temperature: {}", result.0, result.1);
 
         let mut state = state.write().await;
         state.pressure = result.0;

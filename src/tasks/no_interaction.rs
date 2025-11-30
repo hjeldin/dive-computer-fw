@@ -1,4 +1,4 @@
-use crate::{INTERACTION, LOW_POWER_MODE, RTC, SHARED_I2C};
+use crate::{INTERACTION, LOW_POWER_MODE, SHARED_I2C};
 use core::mem;
 use core::sync::atomic::Ordering;
 // use embassy_stm32::low_power;

@@ -14,13 +14,13 @@ use core::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 use defmt::{info, unwrap, Debug2Format};
 use embassy_executor::Spawner;
 use embassy_stm32::exti::{self, ExtiInput};
-use embassy_stm32::gpio::{Input, Level, Output, Pull, Speed};
+use embassy_stm32::gpio::{Flex, Input, Level, Output, Pull, Speed};
 use embassy_stm32::i2c::{self, I2c};
 // use embassy_stm32::low_power::Executor;
 use embassy_stm32::mode::Async;
 use embassy_stm32::pac::ADC1;
-use embassy_stm32::peripherals::{ADC1, DMA1_CH1, DMA1_CH3, DMA2_CH1, DMA2_CH4, PC1, PA6, PA7, PB0, PB1, PB10, PB11, QUADSPI, RCC, SDMMC1};
-use embassy_stm32::rcc::disable;
+use embassy_stm32::peripherals::{ADC1, DMA1_CH1, DMA1_CH3, DMA2_CH1, DMA2_CH4, PC1, PA6, PA7, PB0, PB1, PB10, PB11, QUADSPI, RCC, RTC, SDMMC1};
+use embassy_stm32::rcc::{clocks, disable};
 use embassy_stm32::rtc::{DateTime, DayOfWeek, Rtc, RtcConfig};
 use embassy_stm32::spi::{self, Spi};
 use embassy_stm32::spi::mode::Master as SpiMaster;
@@ -70,7 +70,6 @@ static TRIGGER_BUZZ: AtomicU16 = AtomicU16::new(0);
 static TRIGGER_VOLUME: AtomicU16 = AtomicU16::new(0);
 static INTERACTION: AtomicBool = AtomicBool::new(false);
 static LOW_POWER_MODE: AtomicBool = AtomicBool::new(false);
-static RTC: StaticCell<Rtc> = StaticCell::new();
 
 bind_interrupts!(struct Irqs {
     EXTI1 => exti::InterruptHandler<interrupt::typelevel::EXTI1>;
@@ -154,7 +153,7 @@ async fn async_main(spawner: Spawner) {
         divr: Some(embassy_stm32::rcc::PllRDiv::DIV2),
         prediv: embassy_stm32::rcc::PllPreDiv::DIV1,
     });
-    // USB
+    // // USB
     defaults.rcc.pllsai1 = Some(embassy_stm32::rcc::Pll {
         source: embassy_stm32::rcc::PllSource::HSE,
         prediv: embassy_stm32::rcc::PllPreDiv::DIV1,
@@ -176,7 +175,9 @@ async fn async_main(spawner: Spawner) {
     defaults.rcc.ahb_pre = embassy_stm32::rcc::AHBPrescaler::DIV1;
     defaults.rcc.apb1_pre = embassy_stm32::rcc::APBPrescaler::DIV1;
     defaults.rcc.apb2_pre = embassy_stm32::rcc::APBPrescaler::DIV1;
-    defaults.rcc.mux.adcsel = embassy_stm32::rcc::mux::Adcsel::SYS;
+    defaults.rcc.mux.adcsel = embassy_stm32::rcc::mux::Adcsel::PLL1_Q;
+
+    
     // defaults.rcc.hsi48 = Some(Hsi48Config { sync_from_usb: true }); // needed for USB
 
     // defaults.rcc.pll = Some(embassy_stm32::rcc::Pll {
@@ -195,13 +196,68 @@ async fn async_main(spawner: Spawner) {
     // turn me on to enable debugging while asleep
     // defaults.enable_debug_during_sleep = false;
     let mut p = embassy_stm32::init(defaults);
+    
+    // Print clock information
+    let clocks = clocks(&p.RCC);
+    info!("=== Clock Configuration ===");
+    if let Some(sys) = Option::<embassy_stm32::time::Hertz>::from(clocks.sys) {
+        info!("  System Clock (SYSCLK): {} Hz", sys.0);
+    }
+    if let Some(hclk1) = Option::<embassy_stm32::time::Hertz>::from(clocks.hclk1) {
+        info!("  AHB1 Clock (HCLK1): {} Hz", hclk1.0);
+    }
+    if let Some(hclk2) = Option::<embassy_stm32::time::Hertz>::from(clocks.hclk2) {
+        info!("  AHB2 Clock (HCLK2): {} Hz", hclk2.0);
+    }
+    if let Some(hclk3) = Option::<embassy_stm32::time::Hertz>::from(clocks.hclk3) {
+        info!("  AHB3 Clock (HCLK3): {} Hz", hclk3.0);
+    }
+    if let Some(pclk1) = Option::<embassy_stm32::time::Hertz>::from(clocks.pclk1) {
+        info!("  APB1 Clock (PCLK1): {} Hz", pclk1.0);
+    }
+    if let Some(pclk1_tim) = Option::<embassy_stm32::time::Hertz>::from(clocks.pclk1_tim) {
+        info!("  APB1 Timer Clock: {} Hz", pclk1_tim.0);
+    }
+    if let Some(pclk2) = Option::<embassy_stm32::time::Hertz>::from(clocks.pclk2) {
+        info!("  APB2 Clock (PCLK2): {} Hz", pclk2.0);
+    }
+    if let Some(pclk2_tim) = Option::<embassy_stm32::time::Hertz>::from(clocks.pclk2_tim) {
+        info!("  APB2 Timer Clock: {} Hz", pclk2_tim.0);
+    }
+    if let Some(pll1_p) = Option::<embassy_stm32::time::Hertz>::from(clocks.pll1_p) {
+        info!("  PLL1 P Output: {} Hz", pll1_p.0);
+    }
+    if let Some(pll1_q) = Option::<embassy_stm32::time::Hertz>::from(clocks.pll1_q) {
+        info!("  PLL1 Q Output: {} Hz", pll1_q.0);
+    }
+    if let Some(pllsai1_p) = Option::<embassy_stm32::time::Hertz>::from(clocks.pllsai1_p) {
+        info!("  PLLSAI1 P Output: {} Hz", pllsai1_p.0);
+    }
+    if let Some(pllsai1_q) = Option::<embassy_stm32::time::Hertz>::from(clocks.pllsai1_q) {
+        info!("  PLLSAI1 Q Output: {} Hz", pllsai1_q.0);
+    }
+    if let Some(pllsai2_p) = Option::<embassy_stm32::time::Hertz>::from(clocks.pllsai2_p) {
+        info!("  PLLSAI2 P Output: {} Hz", pllsai2_p.0);
+    }
+    if let Some(hsi) = Option::<embassy_stm32::time::Hertz>::from(clocks.hsi) {
+        info!("  HSI: {} Hz", hsi.0);
+    }
+    if let Some(hse) = Option::<embassy_stm32::time::Hertz>::from(clocks.hse) {
+        info!("  HSE: {} Hz", hse.0);
+    }
+    if let Some(rtc) = Option::<embassy_stm32::time::Hertz>::from(clocks.rtc) {
+        info!("  RTC Clock: {} Hz", rtc.0);
+    }
+    // let adcclk = p.RCC.ccipr.read().adcsel().bits(); 
+    // info!("ADCCLK selection bits: {}", adcclk);
+    info!("===========================");
 
-    // give ownership of rtc peripheral to the executor
-    // let mut rtc = embassy_stm32::rtc::Rtc::new(p.RTC, RtcConfig::default());
+    // // Initialize RTC for flash timestamp task
+    // let (mut rtc, time_provider) = embassy_stm32::rtc::Rtc::new(p.RTC, RtcConfig::default());
     // let _ = rtc.set_datetime(DateTime::from(2024, 12, 22, DayOfWeek::Sunday, 21, 37, 0, 0).unwrap());
-    // let mut rtc = RTC.init(rtc);
+    // let time_provider: &'static RtcTimeProvider = RTC_TIME_PROVIDER.init(time_provider);
 
-    // embassy_stm32::low_power::stop_with_rtc(rtc);
+    // // embassy_stm32::low_power::stop_with_rtc(rtc);
 
     let mut del_var = 2000;
 
@@ -222,9 +278,7 @@ async fn async_main(spawner: Spawner) {
     let mut spi_nrg_config = spi::Config::default();
     spi_nrg_config.bit_order = spi::BitOrder::MsbFirst;
     spi_nrg_config.frequency = Hertz(2_000_000);
-    // BlueNRG-M0A uses SPI Mode 0 (CPOL=0, CPHA=0)
-    // Mode 0: Clock idle low, data sampled on rising edge
-    // Explicitly set mode to ensure proper clock/data synchronization
+
     spi_nrg_config.mode = spi::Mode {
         polarity: spi::Polarity::IdleLow,
         phase: spi::Phase::CaptureOnFirstTransition,
@@ -239,7 +293,7 @@ async fn async_main(spawner: Spawner) {
     );
 
     let nrg_rst = Output::new(p.PA15, Level::Low, Speed::VeryHigh);
-    // CS pin for BlueNRG-M0A SPI (PC1)
+
     let nrg_cs = Output::new(p.PC4, Level::High, Speed::VeryHigh);
 
     let static_spi1: &'static mut Mutex<ThreadModeRawMutex, Spi<'static, Async, SpiMaster>> =
@@ -266,29 +320,13 @@ async fn async_main(spawner: Spawner) {
     let mut cs: Output<'_> = Output::new(cs, Level::High, Speed::VeryHigh);
     let dc = Output::new(dc, Level::High, Speed::VeryHigh);
     let mut rst = Output::new(rst, Level::High, Speed::VeryHigh);
-    //
-    // // disable onboard led
-    // let mut onboard_led = Output::new(p.PA5, Level::High, Speed::VeryHigh);
-    // onboard_led.set_low();
-    //
-    //
-    // rst.set_low();
-    //
+
     let static_i2c = SHARED_I2C.init(Mutex::new(i2c1));
     //
     let static_dc = SHARED_DC.init(Mutex::new(dc));
     let static_rst = SHARED_RST.init(Mutex::new(rst));
-    //
-    // // let spidriver = spidriver::SPIDriver::new(static_spi, static_dc, static_rst);
-    //
-    // // let bmp280_driver = I2CDriver::new(static_i2c, 0x76);
-    // //
-    // // let ens160_driver = I2CDriver::new(static_i2c, 0x53);
-    // //
+
     let ms5837_driver = I2CDriver::new(static_i2c, 0x76);
-    //
-    //
-    // let mut button = ExtiInput::new(p.PC13, p.EXTI13, Pull::Up);
 
     let button_right = ExtiInput::new(p.PA1, p.EXTI1, Pull::Up, Irqs);
 
@@ -315,59 +353,12 @@ async fn async_main(spawner: Spawner) {
             p.PC11,
             Default::default(),
         )));
-
-
-    // spawner.spawn(ens160::ens_task(ens160_driver)).unwrap();
-    // spawner.spawn(bmp280::bmp_task(bmp280_driver)).unwrap();
-    spawner.spawn(ms5837::ms5837_task(ms5837_driver, &STATE).expect("Failed to spawn MS5837 task"));
-    spawner
-        .spawn(ili9341::screen_task(spi, static_dc, static_rst, &STATE).expect("Failed to spawn ILI9341 task"));
-    // // spawner.spawn(decotask::deco_task()).unwrap();
-    spawner.spawn(btn_right_task(button_right).expect("Failed to spawn Right button task"));
-    spawner.spawn(btn_enter_task(button_enter).expect("Failed to spawn Enter button task"));
-    spawner
-        .spawn(lcd_brightness_task(
-            brightness_button,
-            p.PA10,
-            p.TIM1,
-            static_dma1_ch1
-        ).expect("Failed to spawn LCD brightness task"));
-    spawner
-        .spawn(buzzer_pwm_task(
-            p.PC7,
-            p.TIM3,
-            static_dma_buzzer
-        ).expect("Failed to spawn Buzzer PWM task"));
-    
-    // Spawn BLE peripheral task
-    // spawner
-    //     .spawn(bluenrgm0a::ble_peripheral_task(
-    //         static_spi1,
-    //         static_nrg_rst,
-    //         static_nrg_cs,
-    //         &STATE,
-    //     ).expect("Failed to spawn BLE peripheral task"));
-    
     // spawner.spawn(no_interaction_task()).unwrap();
     let usb = p.USB_OTG_FS;
     let pa11 = p.PA11;
     let pa12 = p.PA12;
     let flash = p.FLASH;
-    // spawner.spawn(usb_device_task(usb, pa12, pa11, flash)).unwrap();
-    spawner.spawn(sd_card_task(static_sdmmc1, &STATE).expect("Failed to spawn SD card task"));
-    
-    // Initialize QUADSPI flash timestamp task
-    // QUADSPI pins: PA6 (IO3), PA7 (IO2), PB0 (IO1), PB1 (IO0), PB10 (CLK), PB11 (CS)
-    spawner.spawn(flash_timestamp_task(
-        p.QUADSPI,
-        p.PB1,  // IO0
-        p.PB0,  // IO1
-        p.PA7,  // IO2
-        p.PA6,  // IO3
-        p.PB10, // CLK
-        p.PB11, // NSS (Chip Select)
-        &RTC,
-    ).expect("Failed to spawn QUADSPI flash timestamp task"));
+
 
     let ninedof_i2c = I2CDriver::new(
         static_i2c, 
@@ -377,10 +368,56 @@ async fn async_main(spawner: Spawner) {
         static_i2c,
         0x30
     );
-    spawner.spawn(ninedof_task(ninedof_i2c, threedof_i2c, &STATE).expect("Failed to spawn Ninedof task"));
-
+    // spawner.spawn(ens160::ens_task(ens160_driver)).unwrap();
+    // spawner.spawn(bmp280::bmp_task(bmp280_driver)).unwrap();
+    // spawner.spawn(decotask::deco_task()).unwrap();
+    // spawner
+    // .spawn(bluenrgm0a::ble_peripheral_task(
+    //     static_spi1,
+    //     static_nrg_rst,
+    //     static_nrg_cs,
+    //     &STATE,
+    // ).expect("Failed to spawn BLE peripheral task"));
+    
     cs.set_low();
-
+        
+        
+    spawner.spawn(ms5837::ms5837_task(ms5837_driver, &STATE).expect("Failed to spawn MS5837 task"));
+    spawner
+        .spawn(lcd_brightness_task(
+            brightness_button,
+            p.PA10,
+            p.TIM1,
+            static_dma1_ch1
+        ).expect("Failed to spawn LCD brightness task"));
+    spawner
+        .spawn(ili9341::screen_task(spi, static_dc, static_rst, &STATE).expect("Failed to spawn ILI9341 task"));
+    
+    spawner.spawn(btn_right_task(button_right).expect("Failed to spawn Right button task"));
+    spawner.spawn(btn_enter_task(button_enter).expect("Failed to spawn Enter button task"));
+    spawner
+    .spawn(buzzer_pwm_task(
+        p.PC7,
+        p.TIM3,
+        static_dma_buzzer
+    ).expect("Failed to spawn Buzzer PWM task"));
+    
+    spawner.spawn(sd_card_task(static_sdmmc1, &STATE).expect("Failed to spawn SD card task"));
+    
+    spawner.spawn(flash_timestamp_task(
+        p.QUADSPI,
+        p.PB1,  // IO0
+        p.PB0,  // IO1
+        p.PA7,  // IO2
+        p.PA6,  // IO3
+        p.PB10, // CLK
+        p.PB11, // NSS (Chip Select)
+        p.RTC,  // RTC peripheral
+    ).expect("Failed to spawn QUADSPI flash timestamp task"));
+    
+    spawner.spawn(ninedof_task(ninedof_i2c, threedof_i2c, &STATE).expect("Failed to spawn Ninedof task"));
+    
+    
     spawner.spawn(batt_voltage_monitor_task(
         p.PC3,
         p.PC0,
@@ -389,17 +426,19 @@ async fn async_main(spawner: Spawner) {
         p.ADC1,
         p.PC1,
         &STATE,
+        p.DMA2_CH3,
     ).expect("Failed to spawn Battery voltage monitor task"));
-
+    
     // spawner.spawn(air_quality_request_task(
-    //     p.USART1,
-    //     p.PB6,
-    //     p.PB7,
-    //     p.DMA2_CH6,
-    //     p.DMA2_CH7,
-    //     0x53,
-    // )).unwrap();
-
+        //     p.USART1,
+        //     p.PB6,
+        //     p.PB7,
+        //     p.DMA2_CH6,
+        //     p.DMA2_CH7,
+        //     0x53,
+        // )).unwrap();
+        
+    // spawner.spawn(usb_device_task(usb, pa12, pa11, flash)).unwrap();
     loop {
         Timer::after_millis(5000).await;
     }

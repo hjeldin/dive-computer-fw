@@ -51,7 +51,7 @@ impl<'a> SDMMCDevice<'a> {
                     break;
                 },
                 Err(e) => {
-                    info!("waiting for card error, retrying: {:?}", e);
+                    // info!("waiting for card error, retrying: {:?}", e);
                     _err = Some(e);
                 }
             }
@@ -105,7 +105,6 @@ impl<'a> BlockDevice for SDMMCDevice<'a> {
 
 #[embassy_executor::task]
 pub async fn sd_card_task(sdmmc: &'static Mutex<ThreadModeRawMutex, Sdmmc<'static, SDMMC1>>, state: &'static RwLock<ThreadModeRawMutex, state::State>) {
-    return;
     let mut device = SDMMCDevice::new(sdmmc);
     device.init().await;
 
@@ -122,7 +121,7 @@ pub async fn sd_card_task(sdmmc: &'static Mutex<ThreadModeRawMutex, Sdmmc<'stati
     let mut file = root_dir.open_file_in_dir("test.txt", Mode::ReadWriteCreateOrAppend).await.unwrap();
 
     loop {
-        Timer::after_millis(100).await;
+        Timer::after_millis(1000).await;
         let state = state.read().await;
         let mut buf = [0u8; 64];
         let text = format_no_std::show(&mut buf, format_args!("{:.5}\n{:.1}\n", state.pressure, state.temperature)).unwrap();
@@ -132,5 +131,7 @@ pub async fn sd_card_task(sdmmc: &'static Mutex<ThreadModeRawMutex, Sdmmc<'stati
         let gyro = format_no_std::show(&mut buf, format_args!("Gyro(rad/s): {:.2}, {:.2}, {:.2}\n", state.gyro_x, state.gyro_y, state.gyro_z)).unwrap();
         file.write(&gyro.as_bytes()).await.unwrap();
         file.flush().await.unwrap();
+
+        // TODO: find a way to catch communication error with the SD card
     }
 }

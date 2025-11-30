@@ -1,5 +1,5 @@
 [toolchain]
-channel = "1.91.1"
+channel = "nightly-2025-09-26"
 components = [ "rust-src", "llvm-tools", "rust-std"]
 targets = [
     "thumbv7em-none-eabi",

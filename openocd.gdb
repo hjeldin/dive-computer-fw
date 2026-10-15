@@ -5,7 +5,7 @@ set backtrace limit 32
 
 monitor arm semihosting enable
 monitor reset halt
-file ./target/thumbv7em-none-eabi/release/stm-blink
+file ./target/thumbv7em-none-eabihf/release/stm-blink
 break sdmmc/mod.rs:1056
 load
 monitor reset

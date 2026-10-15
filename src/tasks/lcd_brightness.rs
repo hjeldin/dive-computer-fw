@@ -1,8 +1,8 @@
 use crate::{INTERACTION, LCD_MAX_DUTY_CYCLE, LOW_POWER_MODE};
-use core::mem;
 use core::sync::atomic::Ordering;
 use cortex_m::prelude::_embedded_hal_Pwm;
 use defmt::info;
+use embassy_futures::select::{Either, select};
 use embassy_stm32::exti::ExtiInput;
 use embassy_stm32::gpio::Pull;
 use embassy_stm32::Peri;
@@ -39,22 +39,57 @@ pub async fn lcd_brightness_task(
     pwm.channel(pwm_channel).set_duty_cycle(max_duty / 12);
     pwm.channel(pwm_channel).enable();
     loop {
-        brightness_button.wait_for_rising_edge().await;
-        INTERACTION.store(true, Ordering::Relaxed);
-        del_var -= max_duty / 5;
-        if del_var < max_duty / 5 {
-            del_var = LCD_MAX_DUTY_CYCLE.load(Ordering::Relaxed);
-        }
-        let del = del_var;
-        pwm.channel(pwm_channel).set_duty_cycle(del as u16);
-        Timer::after_millis(1000).await;
-        if (LOW_POWER_MODE.load(Ordering::Relaxed) == true) {
-            pwm.channel(pwm_channel).set_duty_cycle(0);
-            pwm.disable(pwm_channel);
-            info!("[LCDBrightness] Low power mode");
-            break;
+        match select(
+            brightness_button.wait_for_rising_edge(),
+            async {
+                loop {
+                    Timer::after_millis(100).await;
+                    if LOW_POWER_MODE.load(Ordering::Relaxed) {
+                        return;
+                    }
+                }
+            },
+        )
+        .await
+        {
+            Either::First(_) => {
+                // Button pressed
+                if LOW_POWER_MODE.load(Ordering::Relaxed) {
+                    // If in low power mode, wake up the system
+                    info!("[LCDBrightness] Button pressed - waking from low power mode");
+                    LOW_POWER_MODE.store(false, Ordering::Relaxed);
+                    INTERACTION.store(true, Ordering::Relaxed);
+                    // Restore brightness
+                    let del = LCD_MAX_DUTY_CYCLE.load(Ordering::Relaxed) / 12;
+                    pwm.channel(pwm_channel).set_duty_cycle(del as u32);
+                    pwm.channel(pwm_channel).enable();
+                } else {
+                    // Normal operation - adjust brightness
+                    INTERACTION.store(true, Ordering::Relaxed);
+                    del_var -= max_duty / 5;
+                    if del_var < max_duty / 5 {
+                        del_var = LCD_MAX_DUTY_CYCLE.load(Ordering::Relaxed);
+                    }
+                    let del = del_var;
+                    pwm.channel(pwm_channel).set_duty_cycle(del as u32);
+                }
+            }
+            Either::Second(_) => {
+                // LOW_POWER_MODE became true
+                pwm.channel(pwm_channel).set_duty_cycle(0);
+                pwm.disable(pwm_channel);
+                info!("[LCDBrightness] Low power mode - waiting for button press");
+                // Wait for button press to wake up
+                brightness_button.wait_for_rising_edge().await;
+                // Button pressed - wake up
+                info!("[LCDBrightness] Button pressed - waking from low power mode");
+                LOW_POWER_MODE.store(false, Ordering::Relaxed);
+                INTERACTION.store(true, Ordering::Relaxed);
+                // Restore brightness
+                let del = LCD_MAX_DUTY_CYCLE.load(Ordering::Relaxed) / 12;
+                pwm.channel(pwm_channel).set_duty_cycle(del as u32);
+                pwm.channel(pwm_channel).enable();
+            }
         }
     }
-
-    mem::drop(pwm);
 }

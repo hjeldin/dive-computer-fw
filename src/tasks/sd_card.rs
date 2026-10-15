@@ -121,14 +121,18 @@ pub async fn sd_card_task(sdmmc: &'static Mutex<ThreadModeRawMutex, Sdmmc<'stati
     let mut file = root_dir.open_file_in_dir("test.txt", Mode::ReadWriteCreateOrAppend).await.unwrap();
 
     loop {
-        Timer::after_millis(1000).await;
-        let state = state.read().await;
+        Timer::after_secs(1).await;
+        let read_state: state::State;
+        {
+            let guard = state.read().await;
+            read_state = guard.clone();
+        }
         let mut buf = [0u8; 64];
-        let text = format_no_std::show(&mut buf, format_args!("{:.5}\n{:.1}\n", state.pressure, state.temperature)).unwrap();
+        let text = format_no_std::show(&mut buf, format_args!("{:.5}\n{:.1}\n", read_state.pressure, read_state.temperature)).unwrap();
         file.write(&text.as_bytes()).await.unwrap();
-        let accel = format_no_std::show(&mut buf, format_args!("Accel(m/s²): {:.2}, {:.2}, {:.2}\n", state.accel_x, state.accel_y, state.accel_z)).unwrap();
+        let accel = format_no_std::show(&mut buf, format_args!("Accel(m/s²): {:.2}, {:.2}, {:.2}\n", read_state.accel_x, read_state.accel_y, read_state.accel_z)).unwrap();
         file.write(&accel.as_bytes()).await.unwrap();
-        let gyro = format_no_std::show(&mut buf, format_args!("Gyro(rad/s): {:.2}, {:.2}, {:.2}\n", state.gyro_x, state.gyro_y, state.gyro_z)).unwrap();
+        let gyro = format_no_std::show(&mut buf, format_args!("Gyro(rad/s): {:.2}, {:.2}, {:.2}\n", read_state.gyro_x, read_state.gyro_y, read_state.gyro_z)).unwrap();
         file.write(&gyro.as_bytes()).await.unwrap();
         file.flush().await.unwrap();
 

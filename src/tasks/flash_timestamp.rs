@@ -6,6 +6,8 @@ use embassy_stm32::peripherals::RTC;
 use embassy_stm32::rtc::{Rtc, RtcConfig, RtcTimeProvider, RtcError, DateTime, DayOfWeek};
 use embassy_stm32::Peri;
 use embassy_time::Timer;
+use crate::LOW_POWER_MODE;
+use core::sync::atomic::Ordering;
 
 // QUADSPI flash address for storing timestamp
 // QUADSPI flash is memory-mapped at 0x90000000
@@ -345,7 +347,8 @@ pub async fn flash_timestamp_task(
     rtc_peripheral: Peri<'static, RTC>,
 ) {
     // Initialize RTC
-    let (mut rtc, time_provider) = Rtc::new(rtc_peripheral, RtcConfig::default());
+    let (mut rtc, time_provider) = Rtc::new(rtc_peripheral);
+    // let time_provider = Rtc::new(rtc_peripheral, RtcConfig::default());
     
     let mut config = Config::default();
     config.memory_size = MemorySize::_32MiB;
@@ -412,15 +415,17 @@ pub async fn flash_timestamp_task(
         // Create DateTime and set RTC
         match DateTime::from(year, month, day, day_of_week, hour, minute, second, 0) {
             Ok(datetime) => {
-                match rtc.set_datetime(datetime) {
-                    Ok(()) => {
-                        info!("RTC restored from flash: {:04}-{:02}-{:02} {:02}:{:02}:{:02}",
-                            year, month, day, hour, minute, second);
-                    }
-                    Err(e) => {
-                        warn!("Failed to set RTC from flash datetime: {:?}", e);
-                    }
-                }
+                // match critical_section::with(|cs| {
+                //     rtc.borrow_mut(cs).set_datetime(datetime)
+                // }) {
+                //     Ok(()) => {
+                //         info!("RTC restored from flash: {:04}-{:02}-{:02} {:02}:{:02}:{:02}",
+                //             year, month, day, hour, minute, second);
+                //     }
+                //     Err(e) => {
+                //         warn!("Failed to set RTC from flash datetime: {:?}", e);
+                //     }
+                // }
             }
             Err(e) => {
                 warn!("Failed to create DateTime from flash data: {:?}", e);
@@ -431,77 +436,91 @@ pub async fn flash_timestamp_task(
     }
 
     loop {
-        // Get current time from RTC
-        let datetime = match time_provider.now() {
-            Ok(dt) => dt,
-            Err(e) => {
-                warn!("Failed to read RTC: {:?}", e);
+        // Check for low power mode - skip QUADSPI operations but keep RTC running
+        if LOW_POWER_MODE.load(Ordering::Relaxed) {
+            info!("[FlashTimestamp] Low power mode - skipping flash writes, RTC continues");
+            // Wait for low power mode to be cleared
+            loop {
                 Timer::after_secs(60).await;
-                continue;
+                if !LOW_POWER_MODE.load(Ordering::Relaxed) {
+                    info!("[FlashTimestamp] Waking from low power mode");
+                    break;
+                }
             }
-        };
-
-        // Extract datetime fields
-        let year = datetime.year();
-        let month = datetime.month();
-        let day = datetime.day();
-        let hour = datetime.hour();
-        let minute = datetime.minute();
-        let second = datetime.second();
-        
-        // Read current flash content to check if we need to update
-        let mut read_buffer = [0u8; DATETIME_DATA_SIZE];
-        flash.read(TIMESTAMP_FLASH_OFFSET, &mut read_buffer);
-        
-        // Extract current values from flash
-        let current_year = u16::from_le_bytes([read_buffer[0], read_buffer[1]]);
-        let current_month = read_buffer[2];
-        let current_day = read_buffer[3];
-        let current_hour = read_buffer[4];
-        let current_minute = read_buffer[5];
-        let current_second = read_buffer[6];
-        
-        // Check if datetime has changed
-        let has_changed = year != current_year 
-            || month != current_month
-            || day != current_day
-            || hour != current_hour
-            || minute != current_minute
-            || second != current_second;
-        
-        // Only write if datetime has changed
-        if has_changed {
-            // Check if sector needs erasing (if it's not all 0xFF)
-            let mut sector_check = [0u8; FLASH_SECTOR_SIZE as usize];
-            flash.read(TIMESTAMP_FLASH_OFFSET, &mut sector_check);
-            let needs_erase = sector_check.iter().any(|&b| b != 0xFF);
-            
-            if needs_erase {
-                info!("Erasing sector at offset 0x{:08X}", TIMESTAMP_FLASH_OFFSET);
-                flash.erase_sector(TIMESTAMP_FLASH_OFFSET);
-            }
-            
-            // Pack datetime fields into buffer
-            // Layout: [year_low, year_high, month, day, hour, minute, second, reserved]
-            let year_bytes = year.to_le_bytes();
-            let mut datetime_bytes = [0u8; DATETIME_DATA_SIZE];
-            datetime_bytes[0] = year_bytes[0];
-            datetime_bytes[1] = year_bytes[1];
-            datetime_bytes[2] = month;
-            datetime_bytes[3] = day;
-            datetime_bytes[4] = hour;
-            datetime_bytes[5] = minute;
-            datetime_bytes[6] = second;
-            datetime_bytes[7] = 0; // reserved
-            
-            flash.write(TIMESTAMP_FLASH_OFFSET, &datetime_bytes);
-            
-            info!("Datetime written to flash: {:04}-{:02}-{:02} {:02}:{:02}:{:02}",
-                year, month, day, hour, minute, second);
-        } else {
-            info!("Datetime unchanged: {:04}-{:02}-{:02} {:02}:{:02}:{:02}",
-                year, month, day, hour, minute, second);
+            continue;
         }
+        return;
+        // // Get current time from RTC
+        // let datetime = match time_provider.now() {
+        //     Ok(dt) => dt,
+        //     Err(e) => {
+        //         warn!("Failed to read RTC: {:?}", e);
+        //         Timer::after_secs(60).await;
+        //         continue;
+        //     }
+        // };
+
+        // // Extract datetime fields
+        // let year = datetime.year();
+        // let month = datetime.month();
+        // let day = datetime.day();
+        // let hour = datetime.hour();
+        // let minute = datetime.minute();
+        // let second = datetime.second();
+        
+        // // Read current flash content to check if we need to update
+        // let mut read_buffer = [0u8; DATETIME_DATA_SIZE];
+        // flash.read(TIMESTAMP_FLASH_OFFSET, &mut read_buffer);
+        
+        // // Extract current values from flash
+        // let current_year = u16::from_le_bytes([read_buffer[0], read_buffer[1]]);
+        // let current_month = read_buffer[2];
+        // let current_day = read_buffer[3];
+        // let current_hour = read_buffer[4];
+        // let current_minute = read_buffer[5];
+        // let current_second = read_buffer[6];
+        
+        // // Check if datetime has changed
+        // let has_changed = year != current_year 
+        //     || month != current_month
+        //     || day != current_day
+        //     || hour != current_hour
+        //     || minute != current_minute
+        //     || second != current_second;
+        
+        // // Only write if datetime has changed
+        // if has_changed {
+        //     // Check if sector needs erasing (if it's not all 0xFF)
+        //     let mut sector_check = [0u8; FLASH_SECTOR_SIZE as usize];
+        //     flash.read(TIMESTAMP_FLASH_OFFSET, &mut sector_check);
+        //     let needs_erase = sector_check.iter().any(|&b| b != 0xFF);
+            
+        //     if needs_erase {
+        //         info!("Erasing sector at offset 0x{:08X}", TIMESTAMP_FLASH_OFFSET);
+        //         flash.erase_sector(TIMESTAMP_FLASH_OFFSET);
+        //     }
+            
+        //     // Pack datetime fields into buffer
+        //     // Layout: [year_low, year_high, month, day, hour, minute, second, reserved]
+        //     let year_bytes = year.to_le_bytes();
+        //     let mut datetime_bytes = [0u8; DATETIME_DATA_SIZE];
+        //     datetime_bytes[0] = year_bytes[0];
+        //     datetime_bytes[1] = year_bytes[1];
+        //     datetime_bytes[2] = month;
+        //     datetime_bytes[3] = day;
+        //     datetime_bytes[4] = hour;
+        //     datetime_bytes[5] = minute;
+        //     datetime_bytes[6] = second;
+        //     datetime_bytes[7] = 0; // reserved
+            
+        //     flash.write(TIMESTAMP_FLASH_OFFSET, &datetime_bytes);
+            
+        //     info!("Datetime written to flash: {:04}-{:02}-{:02} {:02}:{:02}:{:02}",
+        //         year, month, day, hour, minute, second);
+        // } else {
+        //     info!("Datetime unchanged: {:04}-{:02}-{:02} {:02}:{:02}:{:02}",
+        //         year, month, day, hour, minute, second);
+        // }
 
         Timer::after_secs(60).await; // Update datetime every 60 seconds
     }

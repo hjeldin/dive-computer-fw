@@ -6,7 +6,7 @@ use embassy_time::Timer;
 use static_cell::StaticCell;
 
 use crate::i2cdriver::I2CDriver;
-use crate::{state, LOW_POWER_MODE};
+use crate::{state, LCD_WAKE, LOW_POWER_MODE};
 
 #[allow(dead_code)]
 mod ms5837regs {
@@ -321,16 +321,19 @@ pub async fn ms5837_task(
             .calculate_temperature_pression(ms5837regs::Resolution::Osr256)
             .await;
 
-
         let _depth = ms5837_sensor.depth(1.0).await;
         let _altitude = ms5837_sensor.altitude().await;
 
-        let mut state = state.write().await;
-        state.pressure = result.0;
-        state.temperature = result.1;
+        {
+            let mut state = state.write().await;
+            state.pressure = result.0;
+            state.temperature = result.1;
+            info!("Pressure: {}, Temperature: {}", state.pressure, state.temperature);
+        }
+        LCD_WAKE.signal(());
+
         // todo: check ascent speed
-        
-        Timer::after_millis(1000).await;
+        Timer::after_millis(500).await;
         if LOW_POWER_MODE.load(Ordering::Relaxed) == true {
             info!("[MS5837] Low power mode");
             return;

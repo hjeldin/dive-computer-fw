@@ -12,3 +12,8 @@ target/
 !.vscode/tasks.json
 !.vscode/extensions.json
 aux/.venv
+.idea/
+.vscode/
+.vscode-old/
+aux/ahrs_display
+.direnv/

@@ -10,7 +10,9 @@ use embassy_time::Timer;
 use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex;
 use embassy_sync::rwlock::RwLock;
 use crate::state;
-use libm::floor;
+use crate::{LCD_WAKE, LOW_POWER_MODE};
+use core::sync::atomic::Ordering;
+use libm::floorf;
 
 #[embassy_executor::task]
 pub async fn batt_voltage_monitor_task(
@@ -36,39 +38,54 @@ pub async fn batt_voltage_monitor_task(
     let mut bat_mon_en = Output::new(bat_mon_en_pin, Level::Low, Speed::VeryHigh);
 
     let mut vrefint_channel = adc_bat_v.enable_vrefint();
-    // let mut degraded_vrefint_channel = vrefint_channel.degrade_adc();
-    // let mut degraded_adc_pin = adc_pin.degrade_adc();
-    let mut degraded_vrefint_channel = adc_bat_v.enable_vrefint();
     Timer::after_millis(500).await;
 
     // Truncate to 2 decimal places
     let clamp_to_2_decimals = |value: f32| -> f32 {
-        floor(value as f64 * 100.0) as f32 / 100.0
+        floorf(value * 100.0) / 100.0
     };
 
     const FILTER_ALPHA: f32 = 0.2;
     let mut filtered_voltage_mv: Option<f32> = None;
 
-    const DMA_BUF_LEN: usize = 512;
-    let mut adc_dma_buf = [0u16; DMA_BUF_LEN];
-    let mut measurements = [0u16; DMA_BUF_LEN / 2];
-    // let mut ring_buffered_adc = adc_bat_v.into_ring_buffered(
-    //     dma1_ch1,
-    //     &mut adc_dma_buf,
-    //     [(adc_bat_v, SampleTime::CYCLES640_5), (degraded_vrefint_channel, SampleTime::CYCLES640_5)].into_iter(),
-    //     RegularConversionMode::Continuous,
-    // );
+    // Read factory calibration value (only needs to be read once)
+    let vrefint_cal = crate::pac::VREFINTCAL.data().read();
+    // VREFINT calibration voltage for STM32L476 is 3.0V (3000mV)
+    const VREFINT_CALIB_MV: f32 = 3000.0;
+    // ADC resolution is 12-bit, so max count is 4095
+    const ADC_MAX_COUNT: f32 = 4095.0;
 
     loop {
+        // Check for low power mode
+        if LOW_POWER_MODE.load(Ordering::Relaxed) {
+            info!("[BattVoltageMonitor] Low power mode - disabling ADC");
+            bat_mon_en.set_low();
+            // Wait for low power mode to be cleared
+            loop {
+                Timer::after_millis(100).await;
+                if !LOW_POWER_MODE.load(Ordering::Relaxed) {
+                    info!("[BattVoltageMonitor] Waking from low power mode");
+                    break;
+                }
+            }
+            continue;
+        }
 
-        bat_mon_en.set_high();       
-        Timer::after_millis(50).await;
+        // Read VREFINT to calculate actual VDDA
+        // This compensates for supply voltage variations
+        let vrefint = adc_bat_v.blocking_read(&mut vrefint_channel, SampleTime::CYCLES2_5);
+        
+        // Calculate actual VDDA using: VDDA = VREFINT_CALIB_MV × (VREFINT_CAL / VREFINT_DATA)
+        let vdda_actual_mv = VREFINT_CALIB_MV * (vrefint_cal as f32 / vrefint as f32);
+
+        bat_mon_en.set_high();
+        Timer::after_millis(500).await;
         let measured = adc_bat_v.blocking_read(&mut adc_pin, SampleTime::CYCLES2_5);
 
-        let v_adc_mv:f32 = measured as f32 * 3.3 / 4095.0;
+        // Convert ADC reading to voltage using calibrated VDDA
+        let v_adc_mv: f32 = (measured as f32 / ADC_MAX_COUNT) * vdda_actual_mv;
         
         bat_mon_en.set_low();
-        Timer::after_millis(1000).await;
 
         let filtered_voltage = match filtered_voltage_mv {
             Some(prev) => FILTER_ALPHA * v_adc_mv + (1.0 - FILTER_ALPHA) * prev,
@@ -76,15 +93,22 @@ pub async fn batt_voltage_monitor_task(
         };
         filtered_voltage_mv = Some(filtered_voltage);
 
-        // R1: 330k, R2: 100k so the voltage divider is vs * 330 / (330 + 100)
-        let vs = v_adc_mv * (330.0 + 100.0) / 330.0;
+        // R_top (VBAT -> ADC): 100k, R_bottom (ADC -> GND): 330k
+        // v_adc = vs * 330 / (100 + 330), so vs = v_adc * (100 + 330) / 330
+        let vs_mv = filtered_voltage * (100.0 + 330.0) / 330.0;
 
-        let clamped_voltage = clamp_to_2_decimals(vs);
+        // state.batt_voltage is in volts
+        let clamped_voltage = clamp_to_2_decimals(vs_mv / 1000.0);
 
-        let mut state = state.write().await;
-        state.batt_voltage = clamped_voltage;
-        state.power_good = power_good.is_low();
-        state.charge_status = charge_status.is_low();
-        state.low_batt = low_batt.is_low();
+        {
+            let mut state = state.write().await;
+            state.batt_voltage = clamped_voltage;
+            
+            state.power_good = power_good.is_low();
+            state.charge_status = charge_status.is_low();
+            state.low_batt = low_batt.is_low();
+        }
+        LCD_WAKE.signal(());
+        Timer::after_secs(1).await;
     }
 }

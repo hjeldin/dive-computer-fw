@@ -3,6 +3,7 @@
 
 use core::arch::asm;
 use crate::i2cdriver::I2CDriver;
+use crate::ms5837::MS5837;
 use crate::tasks::buzzer::buzzer_pwm_task;
 use crate::tasks::enter_button::btn_enter_task;
 use crate::tasks::lcd_brightness::lcd_brightness_task;
@@ -10,13 +11,14 @@ use crate::tasks::next_button::btn_right_task;
 use crate::tasks::ninedof::ninedof_task;
 use crate::tasks::no_interaction::no_interaction_task;
 use core::mem;
-use core::sync::atomic::{AtomicBool, AtomicU16, Ordering};
-use defmt::{info, unwrap, Debug2Format};
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use defmt::{Debug2Format, info, trace, unwrap};
 use embassy_executor::Spawner;
 use embassy_stm32::exti::{self, ExtiInput};
 use embassy_stm32::gpio::{Flex, Input, Level, Output, Pull, Speed};
 use embassy_stm32::i2c::{self, I2c};
-// use embassy_stm32::low_power::Executor;
+use embassy_stm32::low_power::Executor;
+use embassy_stm32::low_power;
 use embassy_stm32::mode::Async;
 use embassy_stm32::pac::ADC1;
 use embassy_stm32::peripherals::{ADC1, DMA1_CH1, DMA1_CH3, DMA2_CH1, DMA2_CH4, PC1, PA6, PA7, PB0, PB1, PB10, PB11, QUADSPI, RCC, RTC, SDMMC1};
@@ -27,10 +29,12 @@ use embassy_stm32::spi::mode::Master as SpiMaster;
 use embassy_stm32::i2c::mode::Master as I2cMaster;
 use embassy_stm32::time::Hertz;
 use embassy_stm32::{bind_interrupts, pac, peripherals, sdmmc, usb, Peri, interrupt};
-use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex;
+use embassy_sync::blocking_mutex::raw::{CriticalSectionRawMutex, ThreadModeRawMutex};
 use embassy_sync::mutex::Mutex;
 use embassy_sync::rwlock::RwLock;
-use embassy_time::Timer;
+use embassy_sync::signal::Signal;
+use embassy_time::{Duration, Timer};
+use portable_atomic::AtomicUsize;
 use static_cell::{StaticCell};
 use {defmt_rtt as _, panic_probe as _};
 use embassy_stm32::flash::{Flash, WRITE_SIZE};
@@ -44,6 +48,8 @@ use crate::tasks::sd_card::sd_card_task;
 use crate::tasks::usb_device::usb_device_task;
 use crate::tasks::air_quality_request::air_quality_request_task;
 use crate::tasks::flash_timestamp::flash_timestamp_task;
+use crate::tasks::ble_irq::ble_irq_task;
+use embassy_stm32::pac::rcc::vals::{Hpre, Ppre};
 // use crate::tasks::usb_device::usb_device_task;
 // use embassy_boot_stm32::{AlignedBuffer, BlockingFirmwareState, FirmwareUpdaterConfig};
 // use embassy_usb_dfu::consts::DfuAttributes;
@@ -61,18 +67,22 @@ mod spidriver;
 mod state;
 mod tasks;
 mod bluenrgm0a;
+mod display_buffer;
 
-static LCD_MAX_DUTY_CYCLE: AtomicU16 = AtomicU16::new(0);
+static LCD_MAX_DUTY_CYCLE: AtomicU32 = AtomicU32::new(0);
 static LCD_REFRESH: AtomicBool = AtomicBool::new(false);
 static LCD_NEXT_ITEM: AtomicBool = AtomicBool::new(false);
 static LCD_ENTER_ITEM: AtomicBool = AtomicBool::new(false);
-static TRIGGER_BUZZ: AtomicU16 = AtomicU16::new(0);
-static TRIGGER_VOLUME: AtomicU16 = AtomicU16::new(0);
+/// Wakes the screen task so it checks for changes right away.
+static LCD_WAKE: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+static TRIGGER_BUZZ: AtomicU32 = AtomicU32::new(0);
+static TRIGGER_VOLUME: AtomicU32 = AtomicU32::new(0);
 static INTERACTION: AtomicBool = AtomicBool::new(false);
 static LOW_POWER_MODE: AtomicBool = AtomicBool::new(false);
 
 bind_interrupts!(struct Irqs {
     EXTI1 => exti::InterruptHandler<interrupt::typelevel::EXTI1>;
+    EXTI2 => exti::InterruptHandler<interrupt::typelevel::EXTI2>;
     EXTI4 => exti::InterruptHandler<interrupt::typelevel::EXTI4>;
     EXTI15_10 => exti::InterruptHandler<interrupt::typelevel::EXTI15_10>;
     I2C1_EV => i2c::EventInterruptHandler<peripherals::I2C1>;
@@ -117,6 +127,7 @@ static SHARED_SPI: StaticCell<Mutex<ThreadModeRawMutex, Spi<'static, Async, SpiM
 static SHARED_SPI_BLUENRG: StaticCell<Mutex<ThreadModeRawMutex, Spi<'static, Async, SpiMaster>>> = StaticCell::new();
 static SHARED_DC: StaticCell<Mutex<ThreadModeRawMutex, Output<'static>>> = StaticCell::new();
 static SHARED_RST: StaticCell<Mutex<ThreadModeRawMutex, Output<'static>>> = StaticCell::new();
+static SHARED_LCD_CS: StaticCell<Mutex<ThreadModeRawMutex, Output<'static>>> = StaticCell::new();
 static SHARED_NRG_RST: StaticCell<Mutex<ThreadModeRawMutex, Output<'static>>> = StaticCell::new();
 static SHARED_NRG_CS: StaticCell<Mutex<ThreadModeRawMutex, Output<'static>>> = StaticCell::new();
 static SHARED_DMA2_CH1: StaticCell<Mutex<ThreadModeRawMutex, Peri<DMA2_CH1>>> = StaticCell::new();
@@ -133,8 +144,8 @@ static ADC_PIN: StaticCell<PC1> = StaticCell::new();
 
 // static SERIAL: StaticCell<hal::uart::Uart0> = StaticCell::new();
 
-// #[embassy_executor::task]
 #[embassy_executor::main]
+// #[embassy_executor::main(executor = "embassy_stm32::low_power::Executor")]
 async fn async_main(spawner: Spawner) {
     info!("async_main");
     // Initialize and create handle for devicer peripherals
@@ -142,6 +153,7 @@ async fn async_main(spawner: Spawner) {
     // set the internal clock to run at max (80MHz)
     defaults.rcc.hsi = true;
     defaults.rcc.hse = Some(embassy_stm32::rcc::Hse {
+        // freq: Hertz(8_000_000),
         freq: Hertz(8_000_000),
         mode: embassy_stm32::rcc::HseMode::Oscillator,
     });
@@ -176,6 +188,8 @@ async fn async_main(spawner: Spawner) {
     defaults.rcc.apb1_pre = embassy_stm32::rcc::APBPrescaler::DIV1;
     defaults.rcc.apb2_pre = embassy_stm32::rcc::APBPrescaler::DIV1;
     defaults.rcc.mux.adcsel = embassy_stm32::rcc::mux::Adcsel::PLL1_Q;
+    // defaults.enable_debug_during_sleep = false;
+    defaults.min_stop_pause = Duration::from_millis(500);
 
     
     // defaults.rcc.hsi48 = Some(Hsi48Config { sync_from_usb: true }); // needed for USB
@@ -194,75 +208,97 @@ async fn async_main(spawner: Spawner) {
     // defaults.rcc.apb2_pre = embassy_stm32::rcc::APBPrescaler::DIV1;
 
     // turn me on to enable debugging while asleep
-    // defaults.enable_debug_during_sleep = false;
+    defaults.enable_debug_during_sleep = true;
     let mut p = embassy_stm32::init(defaults);
+
+    // pac::RCC.cfgr().modify(|w| {
+    //     w.set_hpre(Hpre::DIV4);
+    //     w.set_ppre1(Ppre::DIV8);     // APB1 prescaler
+    //     w.set_ppre2(Ppre::DIV8);     // APB2 prescaler
+    // });
     
     // Print clock information
-    let clocks = clocks(&p.RCC);
-    info!("=== Clock Configuration ===");
-    if let Some(sys) = Option::<embassy_stm32::time::Hertz>::from(clocks.sys) {
-        info!("  System Clock (SYSCLK): {} Hz", sys.0);
+    {
+        let clocks = clocks(&p.RCC);
+        info!("=== Clock Configuration ===");
+        if let Some(sys) = Option::<embassy_stm32::time::Hertz>::from(clocks.sys) {
+            info!("  System Clock (SYSCLK): {} Hz", sys.0);
+        }
+        if let Some(hclk1) = Option::<embassy_stm32::time::Hertz>::from(clocks.hclk1) {
+            info!("  AHB1 Clock (HCLK1): {} Hz", hclk1.0);
+        }
+        if let Some(hclk2) = Option::<embassy_stm32::time::Hertz>::from(clocks.hclk2) {
+            info!("  AHB2 Clock (HCLK2): {} Hz", hclk2.0);
+        }
+        if let Some(hclk3) = Option::<embassy_stm32::time::Hertz>::from(clocks.hclk3) {
+            info!("  AHB3 Clock (HCLK3): {} Hz", hclk3.0);
+        }
+        if let Some(pclk1) = Option::<embassy_stm32::time::Hertz>::from(clocks.pclk1) {
+            info!("  APB1 Clock (PCLK1): {} Hz", pclk1.0);
+        }
+        if let Some(pclk1_tim) = Option::<embassy_stm32::time::Hertz>::from(clocks.pclk1_tim) {
+            info!("  APB1 Timer Clock: {} Hz", pclk1_tim.0);
+        }
+        if let Some(pclk2) = Option::<embassy_stm32::time::Hertz>::from(clocks.pclk2) {
+            info!("  APB2 Clock (PCLK2): {} Hz", pclk2.0);
+        }
+        if let Some(pclk2_tim) = Option::<embassy_stm32::time::Hertz>::from(clocks.pclk2_tim) {
+            info!("  APB2 Timer Clock: {} Hz", pclk2_tim.0);
+        }
+        if let Some(pll1_p) = Option::<embassy_stm32::time::Hertz>::from(clocks.pll1_p) {
+            info!("  PLL1 P Output: {} Hz", pll1_p.0);
+        }
+        if let Some(pll1_q) = Option::<embassy_stm32::time::Hertz>::from(clocks.pll1_q) {
+            info!("  PLL1 Q Output: {} Hz", pll1_q.0);
+        }
+        if let Some(pllsai1_p) = Option::<embassy_stm32::time::Hertz>::from(clocks.pllsai1_p) {
+            info!("  PLLSAI1 P Output: {} Hz", pllsai1_p.0);
+        }
+        if let Some(pllsai1_q) = Option::<embassy_stm32::time::Hertz>::from(clocks.pllsai1_q) {
+            info!("  PLLSAI1 Q Output: {} Hz", pllsai1_q.0);
+        }
+        if let Some(pllsai2_p) = Option::<embassy_stm32::time::Hertz>::from(clocks.pllsai2_p) {
+            info!("  PLLSAI2 P Output: {} Hz", pllsai2_p.0);
+        }
+        if let Some(hsi) = Option::<embassy_stm32::time::Hertz>::from(clocks.hsi) {
+            info!("  HSI: {} Hz", hsi.0);
+        }
+        if let Some(hse) = Option::<embassy_stm32::time::Hertz>::from(clocks.hse) {
+            info!("  HSE: {} Hz", hse.0);
+        }
+        if let Some(rtc) = Option::<embassy_stm32::time::Hertz>::from(clocks.rtc) {
+            info!("  RTC Clock: {} Hz", rtc.0);
+        }
+        info!("===========================");
     }
-    if let Some(hclk1) = Option::<embassy_stm32::time::Hertz>::from(clocks.hclk1) {
-        info!("  AHB1 Clock (HCLK1): {} Hz", hclk1.0);
-    }
-    if let Some(hclk2) = Option::<embassy_stm32::time::Hertz>::from(clocks.hclk2) {
-        info!("  AHB2 Clock (HCLK2): {} Hz", hclk2.0);
-    }
-    if let Some(hclk3) = Option::<embassy_stm32::time::Hertz>::from(clocks.hclk3) {
-        info!("  AHB3 Clock (HCLK3): {} Hz", hclk3.0);
-    }
-    if let Some(pclk1) = Option::<embassy_stm32::time::Hertz>::from(clocks.pclk1) {
-        info!("  APB1 Clock (PCLK1): {} Hz", pclk1.0);
-    }
-    if let Some(pclk1_tim) = Option::<embassy_stm32::time::Hertz>::from(clocks.pclk1_tim) {
-        info!("  APB1 Timer Clock: {} Hz", pclk1_tim.0);
-    }
-    if let Some(pclk2) = Option::<embassy_stm32::time::Hertz>::from(clocks.pclk2) {
-        info!("  APB2 Clock (PCLK2): {} Hz", pclk2.0);
-    }
-    if let Some(pclk2_tim) = Option::<embassy_stm32::time::Hertz>::from(clocks.pclk2_tim) {
-        info!("  APB2 Timer Clock: {} Hz", pclk2_tim.0);
-    }
-    if let Some(pll1_p) = Option::<embassy_stm32::time::Hertz>::from(clocks.pll1_p) {
-        info!("  PLL1 P Output: {} Hz", pll1_p.0);
-    }
-    if let Some(pll1_q) = Option::<embassy_stm32::time::Hertz>::from(clocks.pll1_q) {
-        info!("  PLL1 Q Output: {} Hz", pll1_q.0);
-    }
-    if let Some(pllsai1_p) = Option::<embassy_stm32::time::Hertz>::from(clocks.pllsai1_p) {
-        info!("  PLLSAI1 P Output: {} Hz", pllsai1_p.0);
-    }
-    if let Some(pllsai1_q) = Option::<embassy_stm32::time::Hertz>::from(clocks.pllsai1_q) {
-        info!("  PLLSAI1 Q Output: {} Hz", pllsai1_q.0);
-    }
-    if let Some(pllsai2_p) = Option::<embassy_stm32::time::Hertz>::from(clocks.pllsai2_p) {
-        info!("  PLLSAI2 P Output: {} Hz", pllsai2_p.0);
-    }
-    if let Some(hsi) = Option::<embassy_stm32::time::Hertz>::from(clocks.hsi) {
-        info!("  HSI: {} Hz", hsi.0);
-    }
-    if let Some(hse) = Option::<embassy_stm32::time::Hertz>::from(clocks.hse) {
-        info!("  HSE: {} Hz", hse.0);
-    }
-    if let Some(rtc) = Option::<embassy_stm32::time::Hertz>::from(clocks.rtc) {
-        info!("  RTC Clock: {} Hz", rtc.0);
-    }
-    // let adcclk = p.RCC.ccipr.read().adcsel().bits(); 
-    // info!("ADCCLK selection bits: {}", adcclk);
-    info!("===========================");
 
-    // // Initialize RTC for flash timestamp task
-    // let (mut rtc, time_provider) = embassy_stm32::rtc::Rtc::new(p.RTC, RtcConfig::default());
-    // let _ = rtc.set_datetime(DateTime::from(2024, 12, 22, DayOfWeek::Sunday, 21, 37, 0, 0).unwrap());
-    // let time_provider: &'static RtcTimeProvider = RTC_TIME_PROVIDER.init(time_provider);
-
-    // // embassy_stm32::low_power::stop_with_rtc(rtc);
+    // start with all GPIOs as analog to reduce power consumption
+    for r in [
+        embassy_stm32::pac::GPIOA,
+        embassy_stm32::pac::GPIOB,
+        embassy_stm32::pac::GPIOC,
+        embassy_stm32::pac::GPIOD,
+        embassy_stm32::pac::GPIOH,
+    ] {
+        r.moder().modify(|w| {
+            for i in 0..16 {
+                if defaults.enable_debug_during_sleep {
+                    if r == embassy_stm32::pac::GPIOA && [13, 14].contains(&i) {
+                        continue;
+                    }
+                    if r == embassy_stm32::pac::GPIOB && [3].contains(&i) {
+                        continue;
+                    }
+                }
+                w.set_moder(i, embassy_stm32::pac::gpio::vals::Moder::ANALOG);
+            }
+        });
+    }
 
     let mut del_var = 2000;
 
     let mut i2c_config = i2c::Config::default();
-    i2c_config.frequency = Hertz(400_000);
+    i2c_config.frequency = Hertz(1_000_000);
     i2c_config.timeout = embassy_time::Duration::from_millis(1000);
 
     let mut i2c1: i2c::I2c<'_, embassy_stm32::mode::Async, I2cMaster> = i2c::I2c::new(
@@ -276,25 +312,46 @@ async fn async_main(spawner: Spawner) {
     );
 
     let mut spi_nrg_config = spi::Config::default();
-    spi_nrg_config.bit_order = spi::BitOrder::MsbFirst;
-    spi_nrg_config.frequency = Hertz(2_000_000);
+    // spi_nrg_config.bit_order = spi::BitOrder::MsbFirst;
+    // spi_nrg_config.frequency = Hertz(20_000_000);
 
-    spi_nrg_config.mode = spi::Mode {
-        polarity: spi::Polarity::IdleLow,
-        phase: spi::Phase::CaptureOnFirstTransition,
-    };
+    // spi_nrg_config.mode = spi::Mode {
+    //     polarity: spi::Polarity::IdleLow,
+    //     phase: spi::Phase::CaptureOnFirstTransition,
+    // };
 
     let spi_nrg = Spi::new(
         p.SPI1,
         p.PA5, //SCK
         p.PB5, //MOSI
         p.PB4, //MISO
-        p.DMA1_CH3, p.DMA1_CH2, spi_nrg_config,
+        p.DMA1_CH3, 
+        p.DMA1_CH2, 
+        spi_nrg_config,
     );
 
-    let nrg_rst = Output::new(p.PA15, Level::Low, Speed::VeryHigh);
+    let mut nrg_rst = Output::new(p.PA15, Level::Low, Speed::VeryHigh);
 
-    let nrg_cs = Output::new(p.PC4, Level::High, Speed::VeryHigh);
+    let mut nrg_cs = Output::new(p.PC4, Level::High, Speed::VeryHigh);
+
+    // BLE IRQ pin (PB2) - active low interrupt from BlueNRG-M0A
+    // let ble_irq = ExtiInput::new(p.PB2, p.EXTI2, Pull::Up, Irqs);
+    let ready = Input::new(p.PB2, Pull::Up);
+    // nrg_rst.set_high();
+    // nrg_cs.set_high();
+    // while ready.is_low() {
+    //     info!("waiting for ready");
+    // }
+    // nrg_cs.set_low();
+    // loop {
+    //     nrg_rst.set_high();
+    //     Timer::after_millis(10).await;
+    //     nrg_rst.set_low();
+    //     Timer::after_millis(10).await;
+    //     nrg_cs.set_high();
+    //     Timer::after_millis(10).await;
+    //     nrg_cs.set_low();
+    // }
 
     let static_spi1: &'static mut Mutex<ThreadModeRawMutex, Spi<'static, Async, SpiMaster>> =
         SHARED_SPI_BLUENRG.init(Mutex::new(spi_nrg));
@@ -302,42 +359,49 @@ async fn async_main(spawner: Spawner) {
         SHARED_NRG_RST.init(Mutex::new(nrg_rst));
     let static_nrg_cs: &'static mut Mutex<ThreadModeRawMutex, Output<'static>> =
         SHARED_NRG_CS.init(Mutex::new(nrg_cs));
-
+    // let static_ready: &'static mut Mutex<ThreadModeRawMutex, Input<'static>> =
+    //     SHARED_READY.init(Mutex::new(ready));
     let mut spi_config = spi::Config::default();
     spi_config.bit_order = spi::BitOrder::MsbFirst;
-    spi_config.frequency = Hertz(4_000_000);
+    // PCLK1 is 80 MHz and SPI only divides by powers of two: 80 / 2 = 40 MHz.
+    // Above the ILI9341 datasheet's write-cycle spec, but common in practice;
+    // drop to 20 MHz if the panel shows corrupted pixels.
+    spi_config.frequency = Hertz(40_000_000);
 
     let spi = Spi::new(
-        p.SPI2, p.PB13, //SCK
+        p.SPI2, 
+        p.PB13, //SCK
         p.PB15, //MOSI
         p.PB14, //MISO
-        p.DMA1_CH5, p.DMA1_CH4, spi_config,
+        p.DMA1_CH5, 
+        p.DMA1_CH4, 
+        spi_config,
     );
 
     let cs = p.PA8;
     let dc = p.PA9;
     let rst = p.PB12;
-    let mut cs: Output<'_> = Output::new(cs, Level::High, Speed::VeryHigh);
-    let dc = Output::new(dc, Level::High, Speed::VeryHigh);
-    let mut rst = Output::new(rst, Level::High, Speed::VeryHigh);
+    let mut cs = Output::new(cs, Level::Low, Speed::VeryHigh);
+    let mut dc = Output::new(dc, Level::Low, Speed::VeryHigh);
+    let mut rst = Output::new(rst, Level::Low, Speed::VeryHigh);
 
-    let static_i2c = SHARED_I2C.init(Mutex::new(i2c1));
-    //
+    
     let static_dc = SHARED_DC.init(Mutex::new(dc));
     let static_rst = SHARED_RST.init(Mutex::new(rst));
+    let static_lcd_cs = SHARED_LCD_CS.init(Mutex::new(cs));
+    let static_i2c = SHARED_I2C.init(Mutex::new(i2c1));
 
     let ms5837_driver = I2CDriver::new(static_i2c, 0x76);
 
     let button_right = ExtiInput::new(p.PA1, p.EXTI1, Pull::Up, Irqs);
-
     let button_enter = ExtiInput::new(p.PA4, p.EXTI4, Pull::Up, Irqs);
-    
     let brightness_button = ExtiInput::new(p.PC13, p.EXTI13, Pull::Up, Irqs);
-    //
+
     let static_dma_buzzer: &mut Mutex<ThreadModeRawMutex, Peri<DMA2_CH1>> =
         SHARED_DMA2_CH1.init(Mutex::new(p.DMA2_CH1));
     let static_dma1_ch1: &mut Mutex<ThreadModeRawMutex, Peri<DMA1_CH1>> =
         SHARED_DMA1_CH1.init(Mutex::new(p.DMA1_CH1));
+
 
 
     let static_sdmmc1: &mut Mutex<ThreadModeRawMutex, Sdmmc<'static, SDMMC1>> =
@@ -353,7 +417,7 @@ async fn async_main(spawner: Spawner) {
             p.PC11,
             Default::default(),
         )));
-    // spawner.spawn(no_interaction_task()).unwrap();
+    // spawner.spawn(no_interaction_task().expect("Failed to spawn No interaction task"));
     let usb = p.USB_OTG_FS;
     let pa11 = p.PA11;
     let pa12 = p.PA12;
@@ -376,10 +440,13 @@ async fn async_main(spawner: Spawner) {
     //     static_spi1,
     //     static_nrg_rst,
     //     static_nrg_cs,
+    //     static_ready,
     //     &STATE,
     // ).expect("Failed to spawn BLE peripheral task"));
     
-    cs.set_low();
+    // spawner.spawn(ble_irq_task(ble_irq).expect("Failed to spawn BLE IRQ task"));
+    
+    // cs.set_low();
         
         
     spawner.spawn(ms5837::ms5837_task(ms5837_driver, &STATE).expect("Failed to spawn MS5837 task"));
@@ -391,7 +458,7 @@ async fn async_main(spawner: Spawner) {
             static_dma1_ch1
         ).expect("Failed to spawn LCD brightness task"));
     spawner
-        .spawn(ili9341::screen_task(spi, static_dc, static_rst, &STATE).expect("Failed to spawn ILI9341 task"));
+        .spawn(ili9341::screen_task(spi, static_dc, static_rst, static_lcd_cs, &STATE).expect("Failed to spawn ILI9341 task"));
     
     spawner.spawn(btn_right_task(button_right).expect("Failed to spawn Right button task"));
     spawner.spawn(btn_enter_task(button_enter).expect("Failed to spawn Enter button task"));
@@ -430,17 +497,40 @@ async fn async_main(spawner: Spawner) {
     ).expect("Failed to spawn Battery voltage monitor task"));
     
     // spawner.spawn(air_quality_request_task(
-        //     p.USART1,
-        //     p.PB6,
-        //     p.PB7,
-        //     p.DMA2_CH6,
-        //     p.DMA2_CH7,
-        //     0x53,
-        // )).unwrap();
-        
+       //     p.USART1,
+       //     p.PB6,
+       //     p.PB7,
+       //     p.DMA2_CH6,
+       //     p.DMA2_CH7,
+       //     0x53,
+       // )).unwrap();
+       
     // spawner.spawn(usb_device_task(usb, pa12, pa11, flash)).unwrap();
+
+    // // let mut usart = Uart::new_blocking(p.UART2, p.PA3, p.PA2, config).unwrap();
+
+    
+    // info!("wrote Hello, starting echo");
+
+    // let mut buf = [0u8; 1];
     loop {
         Timer::after_millis(5000).await;
+        // unwrap!(usart.blocking_write(b"Hello Embassy World!\r\n"));
+        trace!("main task",);
     }
+    // // loop {
+    // //     Timer::after_millis(5000).await;
+    // //     let mut i = 0;
+
+    // //     loop {
+    // //         i += 1;
+    // //         if i > 10000 {
+    // //             info!("i: {}", i);
+    // //             i = 0;
+    // //             break;
+    // //         }
+    // //     }
+    // //     trace!("main task",);
+    // // }
 }
 

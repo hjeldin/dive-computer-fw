@@ -10,3 +10,4 @@ pub mod batt_voltage_monitor;
 pub mod usart_hello;
 pub mod air_quality_request;
 pub mod flash_timestamp;
+pub mod ble_irq;

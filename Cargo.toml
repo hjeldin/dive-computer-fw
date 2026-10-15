@@ -8,6 +8,8 @@ resolver = "2"
 
 [features]
 serde = []
+# Replace sensor pressure with a simulated deco dive at 10x speed
+sim-dive = []
 
 [dependencies]
 embassy-stm32 = { path = "../embassy/embassy-stm32", features = ["defmt", "chrono", "stm32l476rg", "time-driver-any", "unstable-pac", "exti", "low-power" ] }

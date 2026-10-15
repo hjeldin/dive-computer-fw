@@ -76,7 +76,9 @@ pub async fn no_interaction_task() {
         
         // Check if we should enter low power mode
         let elapsed_ms = last_interaction.elapsed().as_millis() as u32;
-        if elapsed_ms > INACTIVITY_TIMEOUT_MS && !LOW_POWER_MODE.load(Ordering::Relaxed) {
+        // Never during a dive: the screen must stay on and the deco model running
+        let diving = crate::dive::DIVING.load(Ordering::Relaxed);
+        if elapsed_ms > INACTIVITY_TIMEOUT_MS && !diving && !LOW_POWER_MODE.load(Ordering::Relaxed) {
             defmt::info!("No interaction for {} seconds, entering low power mode", INACTIVITY_TIMEOUT_MS / 1000);
             LOW_POWER_MODE.store(true, Ordering::Relaxed);
             // Let the screen task see low power mode and exit

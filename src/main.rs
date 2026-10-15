@@ -57,7 +57,7 @@ use embassy_stm32::pac::rcc::vals::{Hpre, Ppre};
 
 
 mod bmp280;
-mod decotask;
+mod dive;
 mod ens160;
 mod i2cdriver;
 mod ili9341;
@@ -105,10 +105,19 @@ pub static STATE: RwLock<ThreadModeRawMutex, state::State> = RwLock::new(state::
     low_batt: false,
     power_good: false,
     charge_status: false,
+    pressure_samples: 0,
     mag_x: 0.0,
     mag_y: 0.0,
     mag_z: 0.0,
     mag_heading: 0.0,
+    depth_m: 0.0,
+    max_depth_m: 0.0,
+    dive_time_s: 0,
+    ascent_rate_m_min: 0.0,
+    diving: false,
+    ceiling_m: None,
+    guidance: dive_computer_deco::tracker::Guidance::Unknown,
+    tts_min: None,
 });
 
 // #[cortex_m_rt::entry]
@@ -434,7 +443,6 @@ async fn async_main(spawner: Spawner) {
     );
     // spawner.spawn(ens160::ens_task(ens160_driver)).unwrap();
     // spawner.spawn(bmp280::bmp_task(bmp280_driver)).unwrap();
-    // spawner.spawn(decotask::deco_task()).unwrap();
     // spawner
     // .spawn(bluenrgm0a::ble_peripheral_task(
     //     static_spi1,
@@ -450,6 +458,7 @@ async fn async_main(spawner: Spawner) {
         
         
     spawner.spawn(ms5837::ms5837_task(ms5837_driver, &STATE).expect("Failed to spawn MS5837 task"));
+    spawner.spawn(dive::dive_task(&STATE).expect("Failed to spawn dive task"));
     spawner
         .spawn(lcd_brightness_task(
             brightness_button,

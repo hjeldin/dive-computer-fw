@@ -13,7 +13,9 @@ use embassy_time::{with_timeout, Duration, Instant, Timer};
 use ili9341regs::{LcdOrientation, COLUMNS, PAGES};
 use stm_graphics::{scene_manager::SceneManager, Action, Date, DateTime, Time};
 
-use crate::display_buffer::BufferedRegion;
+use crate::display_buffer::{BufferedRegions, Region};
+use dive_computer_deco::tracker::Guidance;
+use stm_graphics::DecoDisplay;
 use crate::{LCD_ENTER_ITEM, LCD_NEXT_ITEM, LCD_REFRESH, LCD_WAKE, LOW_POWER_MODE};
 use embedded_graphics_core::{
     pixelcolor::{raw::RawU16, Rgb565},
@@ -191,6 +193,22 @@ impl ILI9341 {
         self.set_window(x0, y0, x1, y1);
         self.enable_write_data();
         let _ = self.driver.blocking_write(&data);
+    }
+
+    /// Set the window for a stream of pixels sent with `write_dma`.
+    /// The end is exclusive.
+    pub fn begin_write(&mut self, x0: u16, y0: u16, x1: u16, y1: u16) {
+        self.set_window(x0, y0, x1, y1);
+        self.enable_write_data();
+    }
+
+    /// Send pixel bytes (big-endian RGB565) by DMA, so other tasks run
+    /// during the transfer. Call `begin_write` first.
+    pub async fn write_dma(&mut self, data: &[u8]) {
+        // One DMA transfer counts at most 65535 items
+        for chunk in data.chunks(u16::MAX as usize) {
+            let _ = self.driver.write(chunk).await;
+        }
     }
 
     /// Write `bytes` (big-endian RGB565) as one horizontal run starting at `start`.
@@ -425,29 +443,61 @@ impl DrawTarget for ILI9341 {
     }
 }
 
-/// Screen area of the compass in the dive scene; must match
-/// `stm_graphics::dive::build_dive`. The compass clears and redraws its whole
-/// area on every heading change, so it is drawn off-screen first.
+/// Screen areas of the compass and depth profile in the dive scene; must
+/// match `stm_graphics::dive::build_dive`. Both clear and redraw their whole
+/// area on every change, so they are drawn off-screen first.
 const COMPASS_AREA: Rectangle = Rectangle::new(Point::new(200, 16), Size::new(120, 111));
-const COMPASS_BYTES: usize = 120 * 111 * 2;
+const PROFILE_AREA: Rectangle = Rectangle::new(Point::new(2, 133), Size::new(312, 105));
+const COMPASS_BYTES: usize = Region::bytes(COMPASS_AREA.size);
+const PROFILE_BYTES: usize = Region::bytes(PROFILE_AREA.size);
 
-/// 26 KB does not fit beside everything else in SRAM1, so it lives in SRAM2.
-/// memory.x declares SRAM2 as RAM2 but the linker places nothing there, so
-/// the buffer takes it by address instead of through a linker section.
+/// The buffers do not fit beside everything else in SRAM1, so they live in
+/// SRAM2. memory.x declares SRAM2 as RAM2 but the linker places nothing
+/// there, so the buffers take it by address instead of through a linker section.
+/// On the L476 SRAM2 exists only at 0x1000_0000; unlike later L4 parts it
+/// has no alias after SRAM1 at 0x2001_8000, and an access there faults.
 const SRAM2_START: usize = 0x1000_0000;
 const SRAM2_SIZE: usize = 32 * 1024;
-const _: () = assert!(COMPASS_BYTES <= SRAM2_SIZE);
-static COMPASS_PIXELS_TAKEN: AtomicBool = AtomicBool::new(false);
+const _: () = assert!(COMPASS_BYTES + PROFILE_BYTES <= SRAM2_SIZE);
+static SRAM2_TAKEN: AtomicBool = AtomicBool::new(false);
 
-/// The compass buffer, cleared to black. Panics if called twice.
-fn take_compass_pixels() -> &'static mut [u8] {
-    assert!(!COMPASS_PIXELS_TAKEN.swap(true, Ordering::Relaxed), "compass buffer taken twice");
-    let pixels = SRAM2_START as *mut u8;
+/// Buffers for the compass and depth profile, cleared to black.
+/// Panics if called twice.
+fn take_display_buffers() -> BufferedRegions<2> {
+    assert!(!SRAM2_TAKEN.swap(true, Ordering::Relaxed), "display buffers taken twice");
+    let start = SRAM2_START as *mut u8;
     // SAFETY: nothing is linked into SRAM2, the flag above hands this memory
     // out once, and it is zeroed before the slice is made
-    unsafe {
-        pixels.write_bytes(0, COMPASS_BYTES);
-        core::slice::from_raw_parts_mut(pixels, COMPASS_BYTES)
+    let sram2 = unsafe {
+        start.write_bytes(0, COMPASS_BYTES + PROFILE_BYTES);
+        core::slice::from_raw_parts_mut(start, COMPASS_BYTES + PROFILE_BYTES)
+    };
+    let (compass, profile) = sram2.split_at_mut(COMPASS_BYTES);
+    BufferedRegions::new([
+        Region::new(COMPASS_AREA, compass),
+        Region::new(PROFILE_AREA, profile),
+    ])
+}
+
+/// Copy the dive values into the gfx state; returns whether any changed.
+fn apply_dive(gfx: &mut stm_graphics::State, state: &crate::state::State) -> bool {
+    let before = (gfx.depth_m, gfx.max_depth_m, gfx.dive_time_ms, gfx.ascent_rate_m_min, gfx.deco, gfx.tts_min);
+    gfx.depth_m = state.depth_m;
+    gfx.max_depth_m = state.max_depth_m;
+    gfx.dive_time_ms = state.dive_time_s.saturating_mul(1000);
+    gfx.ascent_rate_m_min = state.ascent_rate_m_min;
+    gfx.deco = deco_display(state);
+    gfx.tts_min = state.tts_min;
+    before != (gfx.depth_m, gfx.max_depth_m, gfx.dive_time_ms, gfx.ascent_rate_m_min, gfx.deco, gfx.tts_min)
+}
+
+/// The tracker's guidance as the gfx crate shows it.
+fn deco_display(state: &crate::state::State) -> DecoDisplay {
+    match state.guidance {
+        Guidance::Unknown => DecoDisplay::Unknown,
+        Guidance::Ndl(minutes) => DecoDisplay::Ndl(minutes),
+        Guidance::NdlOver99 => DecoDisplay::NdlOver99,
+        Guidance::Stop { depth_m, minutes } => DecoDisplay::Stop { depth_m, minutes },
     }
 }
 
@@ -481,13 +531,13 @@ pub async fn screen_task(
     Timer::after_millis(500).await;
     ili9341_lcd.clear(0x0000);
     // The panel is black now, matching the zeroed buffer
-    let mut compass = BufferedRegion::new(COMPASS_AREA, take_compass_pixels());
+    let mut buffers = take_display_buffers();
     Timer::after_millis(500).await;
     let mut lastrun;
-    let _ = status_bar.draw(&mut compass.target(&mut ili9341_lcd));
-    let _ = battery_indicator.draw(&mut compass.target(&mut ili9341_lcd));
-    let _ = scene_manager.draw_active_scene(&mut compass.target(&mut ili9341_lcd));
-    compass.flush(&mut ili9341_lcd);
+    let _ = status_bar.draw(&mut buffers.target(&mut ili9341_lcd));
+    let _ = battery_indicator.draw(&mut buffers.target(&mut ili9341_lcd));
+    let _ = scene_manager.draw_active_scene(&mut buffers.target(&mut ili9341_lcd));
+    buffers.flush(&mut ili9341_lcd).await;
     cs.try_lock().unwrap().set_high();
 
     let mut gfx_state = stm_graphics::State {
@@ -506,14 +556,16 @@ pub async fn screen_task(
         dive_time_ms: 0,
         heading: 0.0,
         set_course: None,
+        ..stm_graphics::State::new()
     };
 
     loop {
-        let (pressure, temperature, batt_voltage, heading) = {
+        let (pressure, temperature, batt_voltage, heading, dive_changed) = {
             let state = state.read().await;
-            (state.pressure, state.temperature, state.batt_voltage, state.mag_heading)
+            let dive_changed = apply_dive(&mut gfx_state, &state);
+            (state.pressure, state.temperature, state.batt_voltage, state.mag_heading, dive_changed)
         };
-        let mut refresh = LCD_REFRESH.swap(false, Ordering::Relaxed);
+        let mut refresh = LCD_REFRESH.swap(false, Ordering::Relaxed) || dive_changed;
         if LCD_NEXT_ITEM.swap(false, Ordering::Relaxed) {
             scene_manager
                 .get_active_scene()
@@ -553,8 +605,8 @@ pub async fn screen_task(
             gfx_state.battery = battery_level;
             battery_indicator.set_level(gfx_state.battery);
             cs.try_lock().unwrap().set_low();
-            let _ = battery_indicator.draw(&mut compass.target(&mut ili9341_lcd));
-            compass.flush(&mut ili9341_lcd);
+            let _ = battery_indicator.draw(&mut buffers.target(&mut ili9341_lcd));
+            buffers.flush(&mut ili9341_lcd).await;
             cs.try_lock().unwrap().set_high();
             info!("Battery level: {}", gfx_state.battery);
         }
@@ -562,8 +614,8 @@ pub async fn screen_task(
         scene_manager.get_active_scene().unwrap().update(&gfx_state);
         if refresh {
             cs.try_lock().unwrap().set_low();
-            let _ = scene_manager.draw_active_scene(&mut compass.target(&mut ili9341_lcd));
-            compass.flush(&mut ili9341_lcd);
+            let _ = scene_manager.draw_active_scene(&mut buffers.target(&mut ili9341_lcd));
+            buffers.flush(&mut ili9341_lcd).await;
             cs.try_lock().unwrap().set_high();
         }
         lastrun = Instant::now().as_millis();

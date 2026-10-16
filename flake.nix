@@ -53,6 +53,7 @@
             flip-link
             probe-rs-tools
             usbutils
+            (python3.withPackages (ps: [ ps.pyusb ps.pyserial ps.pytest ]))
             gcc-arm-embedded
 
             rustup

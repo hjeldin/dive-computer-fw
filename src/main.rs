@@ -68,6 +68,7 @@ mod state;
 mod tasks;
 mod bluenrgm0a;
 mod display_buffer;
+mod bootloader;
 
 static LCD_MAX_DUTY_CYCLE: AtomicU32 = AtomicU32::new(0);
 static LCD_REFRESH: AtomicBool = AtomicBool::new(false);
@@ -304,6 +305,9 @@ async fn async_main(spawner: Spawner) {
         });
     }
 
+    // USB comes up first so the DFU command is reachable even if a later init step fails.
+    spawner.spawn(usb_device_task(p.USB_OTG_FS, p.PA12, p.PA11).expect("Failed to spawn USB device task"));
+
     let mut del_var = 2000;
 
     let mut i2c_config = i2c::Config::default();
@@ -427,10 +431,6 @@ async fn async_main(spawner: Spawner) {
             Default::default(),
         )));
     // spawner.spawn(no_interaction_task().expect("Failed to spawn No interaction task"));
-    let usb = p.USB_OTG_FS;
-    let pa11 = p.PA11;
-    let pa12 = p.PA12;
-    let flash = p.FLASH;
 
 
     let ninedof_i2c = I2CDriver::new(
@@ -514,12 +514,21 @@ async fn async_main(spawner: Spawner) {
        //     0x53,
        // )).unwrap();
        
-    // spawner.spawn(usb_device_task(usb, pa12, pa11, flash)).unwrap();
 
     // // let mut usart = Uart::new_blocking(p.UART2, p.PA3, p.PA2, config).unwrap();
 
     
     // info!("wrote Hello, starting echo");
+
+    // Confirm this image once everything is spawned and USB works (or 10 s passed), so a
+    // freshly swapped-in image that fails during startup is rolled back on the next reset.
+    let _ = embassy_futures::select::select(
+        crate::tasks::usb_device::USB_CONFIGURED.wait(),
+        Timer::after_secs(10),
+    )
+    .await;
+    #[cfg(not(feature = "no-confirm"))]
+    bootloader::mark_booted(p.FLASH);
 
     // let mut buf = [0u8; 1];
     loop {

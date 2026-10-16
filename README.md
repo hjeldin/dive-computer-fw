@@ -136,3 +136,27 @@ to intervene to uphold that code of conduct.
 
 [CoC]: https://www.rust-lang.org/policies/code-of-conduct
 [team]: https://github.com/rust-embedded/wg#the-cortex-m-team
+
+## Flashing over USB-C
+
+The board runs a small bootloader (`bootloader/`) that can receive app images over USB.
+Design: `docs/superpowers/specs/2026-10-16-usb-bootloader-design.md`.
+
+One-time setup with a debug probe:
+
+    cd bootloader && cargo run --release
+
+Then build and flash the app over USB:
+
+    cargo build --release
+    nix develop -c sudo tools/flash_usb.py
+
+The tool asks the running app to reboot into the bootloader, uploads the image, and waits
+for the new app to come back. A new image that fails during startup is rolled back on the
+next reset.
+
+Recovery: if the app does not respond over USB, hold ENTER while resetting the board; the
+bootloader stays in update mode (`lsusb` shows `c0de:b007`) and the tool works as usual.
+
+Flashing the app with `cargo run --release` (probe-rs) still works and leaves the
+bootloader in place.

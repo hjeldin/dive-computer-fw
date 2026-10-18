@@ -101,7 +101,7 @@ further steps:
 - [ ] Remove leftovers: `bmp280.rs`, `ens160.rs`, `air_quality_request.rs`,
   `usart_hello.rs`, `no_interaction.rs`, `ble_irq.rs`, the `LOW_POWER_MODE`
   paths and the commented-out BlueNRG code (about 140 compiler warnings).
-- [ ] Rewrite `README.md`: it is still the `cortex-m-quickstart` template
+- [x] Rewrite `README.md`: it is still the `cortex-m-quickstart` template
   with the USB sections appended.
 - [ ] Commit the outstanding work in this repo, `dive-computer-gfx`,
   `dive-computer-deco` and the embassy fork.

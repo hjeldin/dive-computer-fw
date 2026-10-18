@@ -23,7 +23,11 @@ const FLASH_BASE: u32 = 0x0800_0000;
 #[entry]
 fn main() -> ! {
     let update = boot_request::take_update_request() || boot_request::enter_held();
-    let p = embassy_stm32::init(if update { usb_update::clock_config() } else { Default::default() });
+    let mut clocks = if update { usb_update::clock_config() } else { Default::default() };
+    // Must match the app's RTC clock: init resets the backup domain whenever the
+    // configured source differs from the running one, which clears the RTC
+    clocks.rcc.ls = embassy_stm32::rcc::LsConfig::default_lse();
+    let p = embassy_stm32::init(clocks);
     let flash: SharedFlash = Mutex::new(RefCell::new(Flash::new_blocking(p.FLASH)));
 
     // Always finish a pending swap, or revert an unconfirmed image, before anything else. An upload

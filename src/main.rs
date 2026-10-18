@@ -8,7 +8,7 @@ use crate::tasks::buzzer::buzzer_pwm_task;
 use crate::tasks::enter_button::btn_enter_task;
 use crate::tasks::lcd_brightness::lcd_brightness_task;
 use crate::tasks::next_button::btn_right_task;
-use crate::tasks::ninedof::ninedof_task;
+use crate::tasks::ninedof::{imu_wake_task, ninedof_task};
 use crate::tasks::no_interaction::no_interaction_task;
 use core::mem;
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -36,7 +36,10 @@ use embassy_sync::signal::Signal;
 use embassy_time::{Duration, Timer};
 use portable_atomic::AtomicUsize;
 use static_cell::{StaticCell};
-use {defmt_rtt as _, panic_probe as _};
+use panic_probe as _;
+// Logs go to the debug probe, or with `usb-log` to a second USB serial port
+#[cfg(not(feature = "usb-log"))]
+use defmt_rtt as _;
 use embassy_stm32::flash::{Flash, WRITE_SIZE};
 
 use embassy_futures::join::join;
@@ -69,6 +72,8 @@ mod tasks;
 mod bluenrgm0a;
 mod display_buffer;
 mod bootloader;
+#[cfg(feature = "usb-log")]
+mod usb_log;
 
 static LCD_MAX_DUTY_CYCLE: AtomicU32 = AtomicU32::new(0);
 static LCD_REFRESH: AtomicBool = AtomicBool::new(false);
@@ -76,12 +81,14 @@ static LCD_NEXT_ITEM: AtomicBool = AtomicBool::new(false);
 static LCD_ENTER_ITEM: AtomicBool = AtomicBool::new(false);
 /// Wakes the screen task so it checks for changes right away.
 static LCD_WAKE: Signal<CriticalSectionRawMutex, ()> = Signal::new();
-static TRIGGER_BUZZ: AtomicU32 = AtomicU32::new(0);
+/// Buzz once at the given frequency in Hz.
+static TRIGGER_BUZZ: Signal<CriticalSectionRawMutex, u32> = Signal::new();
 static TRIGGER_VOLUME: AtomicU32 = AtomicU32::new(0);
 static INTERACTION: AtomicBool = AtomicBool::new(false);
 static LOW_POWER_MODE: AtomicBool = AtomicBool::new(false);
 
 bind_interrupts!(struct Irqs {
+    EXTI0 => exti::InterruptHandler<interrupt::typelevel::EXTI0>;
     EXTI1 => exti::InterruptHandler<interrupt::typelevel::EXTI1>;
     EXTI2 => exti::InterruptHandler<interrupt::typelevel::EXTI2>;
     EXTI4 => exti::InterruptHandler<interrupt::typelevel::EXTI4>;
@@ -96,9 +103,6 @@ pub static STATE: RwLock<ThreadModeRawMutex, state::State> = RwLock::new(state::
     time: [0; 4],
     pressure: 0.0,
     temperature: 0.0,
-    gyro_x: 0.0,
-    gyro_y: 0.0,
-    gyro_z: 0.0,
     accel_x: 0.0,
     accel_y: 0.0,
     accel_z: 0.0,
@@ -154,8 +158,9 @@ static ADC_PIN: StaticCell<PC1> = StaticCell::new();
 
 // static SERIAL: StaticCell<hal::uart::Uart0> = StaticCell::new();
 
-#[embassy_executor::main]
-// #[embassy_executor::main(executor = "embassy_stm32::low_power::Executor")]
+// Enters STOP2 whenever no driver is busy and the next timer is at least
+// `min_stop_pause` away; the RTC keeps time meanwhile
+#[embassy_executor::main(executor = "embassy_stm32::low_power::Executor")]
 async fn async_main(spawner: Spawner) {
     info!("async_main");
     // Initialize and create handle for devicer peripherals
@@ -199,7 +204,13 @@ async fn async_main(spawner: Spawner) {
     defaults.rcc.apb2_pre = embassy_stm32::rcc::APBPrescaler::DIV1;
     defaults.rcc.mux.adcsel = embassy_stm32::rcc::mux::Adcsel::PLL1_Q;
     // defaults.enable_debug_during_sleep = false;
-    defaults.min_stop_pause = Duration::from_millis(500);
+    // Waking from STOP restarts HSE and the PLLs, about 2 ms: shorter pauses
+    // are not worth it. The 1 s polling tasks wake at different times, so a
+    // longer minimum would rarely leave room to stop
+    defaults.min_stop_pause = Duration::from_millis(50);
+    // RTC from the 32.768 kHz crystal (Y2 on PC14/PC15): LSI is off by several
+    // percent, and the low-power executor keeps time with the RTC during STOP
+    defaults.rcc.ls = embassy_stm32::rcc::LsConfig::default_lse();
 
     
     // defaults.rcc.hsi48 = Some(Hsi48Config { sync_from_usb: true }); // needed for USB
@@ -217,8 +228,11 @@ async fn async_main(spawner: Spawner) {
     // defaults.rcc.apb1_pre = embassy_stm32::rcc::APBPrescaler::DIV1;
     // defaults.rcc.apb2_pre = embassy_stm32::rcc::APBPrescaler::DIV1;
 
-    // turn me on to enable debugging while asleep
-    defaults.enable_debug_during_sleep = true;
+    // Debugging while asleep keeps the CPU clock running in sleep (DBG_SLEEP),
+    // which costs several mA. RTT logging needs it; the usb-log build does not.
+    // Without it the SWD pins are set to analog below, so a probe needs
+    // --connect-under-reset
+    defaults.enable_debug_during_sleep = !cfg!(feature = "usb-log");
     let mut p = embassy_stm32::init(defaults);
 
     // pac::RCC.cfgr().modify(|w| {
@@ -492,6 +506,9 @@ async fn async_main(spawner: Spawner) {
     ).expect("Failed to spawn QUADSPI flash timestamp task"));
     
     spawner.spawn(ninedof_task(ninedof_i2c, threedof_i2c, &STATE).expect("Failed to spawn Ninedof task"));
+    // ISM330DHCX INT1; the accelerometer drives it push-pull, active high
+    let imu_int1 = ExtiInput::new(p.PA0, p.EXTI0, Pull::Down, Irqs);
+    spawner.spawn(imu_wake_task(imu_int1).expect("Failed to spawn IMU wake task"));
     
     
     spawner.spawn(batt_voltage_monitor_task(

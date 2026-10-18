@@ -12,6 +12,13 @@ serde = []
 sim-dive = []
 # Never call mark_booted, so the bootloader rolls back on the next reset (testing only)
 no-confirm = []
+# Send defmt logs over a second USB serial port instead of RTT; read them with tools/usb_log.py
+usb-log = []
+# At boot, erase and program a spare QSPI flash sector (0x01FFE000) and log the result
+flash-selftest = []
+# Show the raw sensor pressure in mbar in place of TTS on the dive screen,
+# for testing the pressure sensor (e.g. in a bag under vacuum)
+raw-pressure = ["stm-graphics/raw-pressure"]
 
 [dependencies]
 dc-update-protocol = { path = "bootloader/protocol" }

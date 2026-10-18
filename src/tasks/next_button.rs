@@ -9,6 +9,7 @@ use embassy_time::Timer;
 pub async fn btn_right_task(mut input: ExtiInput<'static>) {
     loop {
         input.wait_for_rising_edge().await;
+        crate::tasks::lcd_brightness::note_activity();
         
         // If in low power mode, wake up the system
         if LOW_POWER_MODE.load(Ordering::Relaxed) {
@@ -17,14 +18,14 @@ pub async fn btn_right_task(mut input: ExtiInput<'static>) {
             INTERACTION.store(true, Ordering::Relaxed);
             LCD_NEXT_ITEM.store(true, Ordering::Relaxed);
             LCD_WAKE.signal(());
-            TRIGGER_BUZZ.store(100, Ordering::Relaxed);
+            TRIGGER_BUZZ.signal(100);
         } else {
             // Normal operation
             INTERACTION.store(true, Ordering::Relaxed);
             LCD_NEXT_ITEM.store(true, Ordering::Relaxed);
             LCD_WAKE.signal(());
             info!("Right button pressed");
-            TRIGGER_BUZZ.store(100, Ordering::Relaxed);
+            TRIGGER_BUZZ.signal(100);
         }
         
         Timer::after_millis(100).await;

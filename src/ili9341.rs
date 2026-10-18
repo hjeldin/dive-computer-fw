@@ -11,9 +11,13 @@ use embassy_sync::mutex::Mutex;
 use embassy_sync::rwlock::RwLock;
 use embassy_time::{with_timeout, Duration, Instant, Timer};
 use ili9341regs::{LcdOrientation, COLUMNS, PAGES};
-use stm_graphics::{scene_manager::SceneManager, Action, Date, DateTime, Time};
+use stm_graphics::state_machine::states::DIVE_SCENE;
+use stm_graphics::depth_profile::DepthProfile;
+use static_cell::StaticCell;
+use stm_graphics::{scene_manager::SceneManager, Action, DrawableComponent, Setting, Time};
 
 use crate::display_buffer::{BufferedRegions, Region};
+use crate::tasks::flash_timestamp::{StoredSettings, LOADED_SETTINGS};
 use dive_computer_deco::tracker::Guidance;
 use stm_graphics::DecoDisplay;
 use crate::{LCD_ENTER_ITEM, LCD_NEXT_ITEM, LCD_REFRESH, LCD_WAKE, LOW_POWER_MODE};
@@ -46,6 +50,7 @@ mod ili9341regs {
         READ_DISP_STATUS: 0x09,
         READ_DISP_POWER: 0x0A,
         READ_DISP_DIAG: 0x0F,
+        SLEEP_IN: 0x10,
         SLEEP_OUT: 0x11,
         NORMAL_MODE_ON: 0x13,
         POWER_CONTROL_B: 0xCF,
@@ -328,6 +333,23 @@ impl ILI9341 {
 
         Timer::after_millis(120).await;
     }
+
+    /// Blanks the panel and stops its oscillator and charge pumps. The frame
+    /// memory keeps its content and can still be written.
+    pub async fn sleep(&mut self) {
+        self.write_command(&[ili9341regs::DISPLAY_OFF]);
+        self.write_command(&[ili9341regs::SLEEP_IN]);
+        // The datasheet asks for 5 ms before the next command
+        Timer::after_millis(5).await;
+    }
+
+    /// Shows the frame memory again after `sleep`.
+    pub async fn wake(&mut self) {
+        self.write_command(&[ili9341regs::SLEEP_OUT]);
+        // Same settling time as `init`
+        Timer::after_millis(120).await;
+        self.write_command(&[ili9341regs::DISPLAY_ON]);
+    }
 }
 
 impl OriginDimensions for ILI9341 {
@@ -501,6 +523,87 @@ fn deco_display(state: &crate::state::State) -> DecoDisplay {
     }
 }
 
+/// Run an action from the active scene.
+fn handle_action(action: Action, scene_manager: &mut SceneManager, gfx: &mut stm_graphics::State) {
+    match action {
+        Action::None => {}
+        Action::SwitchScene(index) => {
+            scene_manager.switch_scene(index);
+            crate::dive::set_dive_scene_open(scene_manager.active_scene_index() == Some(DIVE_SCENE));
+        }
+        Action::AdjustSetting(setting, delta) => {
+            gfx.adjust_setting(setting, delta);
+            apply_setting(setting, gfx);
+        }
+        Action::SelectSetting(setting, index) => {
+            gfx.select_setting(setting, index);
+            apply_setting(setting, gfx);
+        }
+    }
+}
+
+/// Pass a setting changed in the settings scene to the task that uses it.
+fn apply_setting(setting: Setting, gfx: &stm_graphics::State) {
+    match setting {
+        Setting::Day | Setting::Month | Setting::Year | Setting::Hour | Setting::Minute => {
+            let (date, time) = (&gfx.datetime.date, &gfx.datetime.time);
+            crate::tasks::flash_timestamp::set_datetime(date.year, date.month, date.day, time.hours, time.minutes);
+        }
+        Setting::GfLow | Setting::GfHigh => {
+            crate::dive::GRADIENT_FACTORS.signal((gfx.settings.gf_low, gfx.settings.gf_high));
+            save_settings(gfx);
+        }
+        Setting::Backlight | Setting::ScreenOff => {
+            configure_screen(gfx);
+            save_settings(gfx);
+        }
+        // Only saved: there is no gas planning yet, and serial is the only USB mode
+        Setting::SacRate | Setting::UsbMode => save_settings(gfx),
+    }
+}
+
+/// Pass the backlight and screen-off settings to the backlight task.
+fn configure_screen(gfx: &stm_graphics::State) {
+    crate::tasks::lcd_brightness::configure(gfx.settings.backlight_percent, gfx.settings.screen_off_s);
+}
+
+fn save_settings(gfx: &stm_graphics::State) {
+    crate::tasks::flash_timestamp::save_settings(StoredSettings {
+        gf_low: gfx.settings.gf_low,
+        gf_high: gfx.settings.gf_high,
+        sac_l_min: gfx.settings.sac_l_min,
+        usb_mode: gfx.settings.usb_mode.index() as u8,
+        backlight_percent: gfx.settings.backlight_percent,
+        screen_off_s: gfx.settings.screen_off_s,
+    });
+}
+
+/// Show the settings read from flash at boot.
+fn apply_loaded_settings(gfx: &mut stm_graphics::State, stored: StoredSettings) {
+    gfx.settings.gf_low = stored.gf_low;
+    gfx.settings.gf_high = stored.gf_high;
+    gfx.settings.sac_l_min = stored.sac_l_min;
+    if let Some(mode) = stm_graphics::UsbMode::from_index(stored.usb_mode as usize) {
+        gfx.settings.usb_mode = mode;
+    }
+    gfx.settings.backlight_percent = stored.backlight_percent;
+    gfx.settings.screen_off_s = stored.screen_off_s;
+    configure_screen(gfx);
+}
+
+/// Copy the RTC's date and time into the gfx state; returns whether it changed.
+fn apply_rtc(gfx: &mut stm_graphics::State) -> bool {
+    let Some(now) = crate::tasks::flash_timestamp::rtc_now() else {
+        return false;
+    };
+    let (date, time) = (&mut gfx.datetime.date, &mut gfx.datetime.time);
+    let before = (date.year, date.month, date.day, time.hours, time.minutes);
+    let after = (now.year(), now.month(), now.day(), now.hour(), now.minute());
+    (date.year, date.month, date.day) = (after.0, after.1, after.2);
+    *time = Time::new(after.3, after.4);
+    before != after
+}
+
 /// Value in whole tenths, the precision the screen shows.
 fn tenths(value: f32) -> i32 {
     libm::roundf(value * 10.0) as i32
@@ -520,7 +623,14 @@ pub async fn screen_task(
     cs.try_lock().unwrap().set_high();
     let mut scene_manager = SceneManager::new();
     scene_manager.add_scene(stm_graphics::startup::build_startup());
-    scene_manager.add_scene(stm_graphics::dive::build_dive());
+    // Kept out of the scene so it does not set the size of every component slot
+    static DEPTH_PROFILE: StaticCell<DepthProfile> = StaticCell::new();
+    let profile = DEPTH_PROFILE.init(stm_graphics::dive::new_depth_profile());
+    scene_manager.add_scene(stm_graphics::dive::build_dive(profile));
+    // Scene indices follow the order they are added, which must match
+    // the constants in `stm_graphics::state_machine::states`
+    scene_manager.add_scene(stm_graphics::tissues::build_tissues());
+    scene_manager.add_scene(stm_graphics::settings::build_settings());
 
     let mut status_bar = stm_graphics::StatusBar::new(22, 32);
     let mut battery_indicator = stm_graphics::battery::BatteryIndicator::new(0xAA);
@@ -543,14 +653,6 @@ pub async fn screen_task(
     let mut gfx_state = stm_graphics::State {
         pressure: 12.0,
         temperature: 35.0,
-        datetime: DateTime {
-            date: Date {
-                day: 12,
-                month: 8,
-                year: 2021,
-            },
-            time: Time::new(22, 35),
-        },
         battery: 0xFF,
         uptime_ms: 0,
         dive_time_ms: 0,
@@ -558,30 +660,72 @@ pub async fn screen_task(
         set_course: None,
         ..stm_graphics::State::new()
     };
+    let (gf_low, gf_high) = crate::dive::default_gradient_factors();
+    gfx_state.settings.gf_low = gf_low;
+    gfx_state.settings.gf_high = gf_high;
+    let mut panel_on = true;
 
     loop {
+        // Follow the backlight task: the panel sleeps while the screen is off
+        let was_off = !panel_on;
+        let want_on = crate::tasks::lcd_brightness::panel_on();
+        if want_on != panel_on {
+            cs.try_lock().unwrap().set_low();
+            if want_on {
+                ili9341_lcd.wake().await;
+            } else {
+                ili9341_lcd.sleep().await;
+            }
+            cs.try_lock().unwrap().set_high();
+            panel_on = want_on;
+            info!("[Display] Panel {}", if panel_on { "on" } else { "asleep" });
+            if panel_on {
+                crate::tasks::lcd_brightness::panel_awake();
+            }
+        }
+        // A press on a blank screen only wakes it
+        if was_off {
+            LCD_NEXT_ITEM.store(false, Ordering::Relaxed);
+            LCD_ENTER_ITEM.store(false, Ordering::Relaxed);
+        }
+
         let (pressure, temperature, batt_voltage, heading, dive_changed) = {
             let state = state.read().await;
             let dive_changed = apply_dive(&mut gfx_state, &state);
             (state.pressure, state.temperature, state.batt_voltage, state.mag_heading, dive_changed)
         };
+        gfx_state.uptime_ms = Instant::now().as_millis() as u32;
         let mut refresh = LCD_REFRESH.swap(false, Ordering::Relaxed) || dive_changed;
+        if let Some(stored) = LOADED_SETTINGS.try_take() {
+            apply_loaded_settings(&mut gfx_state, stored);
+            refresh = true;
+        }
+        if apply_rtc(&mut gfx_state) {
+            refresh = true;
+            status_bar.update(&gfx_state);
+            if status_bar.needs_redraw() {
+                cs.try_lock().unwrap().set_low();
+                let _ = status_bar.draw(&mut buffers.target(&mut ili9341_lcd));
+                buffers.flush(&mut ili9341_lcd).await;
+                cs.try_lock().unwrap().set_high();
+                status_bar.set_needs_redraw(false);
+            }
+        }
         if LCD_NEXT_ITEM.swap(false, Ordering::Relaxed) {
-            scene_manager
-                .get_active_scene()
-                .unwrap()
-                .select_next_toggleable();
+            let action = scene_manager.get_active_scene().unwrap().select_next_toggleable();
+            handle_action(action, &mut scene_manager, &mut gfx_state);
             refresh = true;
         }
 
         if LCD_ENTER_ITEM.swap(false, Ordering::Relaxed) {
-            let action = scene_manager
-                .get_active_scene()
-                .unwrap()
-                .click_currently_toggled();
-            if let Action::SwitchScene(index) = action {
-                scene_manager.switch_scene(index);
-            }
+            let action = scene_manager.get_active_scene().unwrap().click_currently_toggled();
+            handle_action(action, &mut scene_manager, &mut gfx_state);
+            refresh = true;
+        }
+
+        if crate::tasks::lcd_brightness::take_brightness_step() {
+            handle_action(Action::AdjustSetting(Setting::Backlight, 1), &mut scene_manager, &mut gfx_state);
+            info!("[Display] Backlight {}%", gfx_state.settings.backlight_percent);
             refresh = true;
         }
 
@@ -611,7 +755,13 @@ pub async fn screen_task(
             info!("Battery level: {}", gfx_state.battery);
         }
 
-        scene_manager.get_active_scene().unwrap().update(&gfx_state);
+        // A popup that timed out returns its action
+        let action = scene_manager.get_active_scene().unwrap().update(&gfx_state);
+        if action != Action::None {
+            handle_action(action, &mut scene_manager, &mut gfx_state);
+            scene_manager.get_active_scene().unwrap().update(&gfx_state);
+            refresh = true;
+        }
         if refresh {
             cs.try_lock().unwrap().set_low();
             let _ = scene_manager.draw_active_scene(&mut buffers.target(&mut ili9341_lcd));
@@ -619,9 +769,11 @@ pub async fn screen_task(
             cs.try_lock().unwrap().set_high();
         }
         lastrun = Instant::now().as_millis();
-        // Sleep until a button, sensor or low power change wakes us.
-        // The timeout is only a fallback so low power mode is never missed.
-        let _ = with_timeout(Duration::from_secs(1), LCD_WAKE.wait()).await;
+        // Sleep until a button, sensor or low power change wakes us. The
+        // timeout keeps the clock current; with the panel asleep nothing is
+        // shown, and waking it signals LCD_WAKE
+        let timeout = if panel_on { Duration::from_secs(1) } else { Duration::from_secs(60) };
+        let _ = with_timeout(timeout, LCD_WAKE.wait()).await;
         if LOW_POWER_MODE.load(Ordering::Relaxed) == true {
             info!("[Display] Low power mode");
             break;

@@ -2,6 +2,7 @@ use core::sync::atomic::Ordering;
 use defmt::info;
 use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex;
 use embassy_sync::rwlock::RwLock;
+use embassy_futures::select::select;
 use embassy_time::Timer;
 use static_cell::StaticCell;
 
@@ -316,6 +317,7 @@ pub async fn ms5837_task(
 ) {
     let mut ms5837_sensor = MS5837::new(sensor);
     ms5837_sensor.init().await;
+    let mut high_rate = crate::dive::HIGH_RATE.receiver().unwrap();
     loop {
         let result = ms5837_sensor
             .calculate_temperature_pression(ms5837regs::Resolution::Osr256)
@@ -334,6 +336,15 @@ pub async fn ms5837_task(
         LCD_WAKE.signal(());
 
         // todo: check ascent speed
-        Timer::after_millis(500).await;
+        if high_rate.try_get().unwrap_or(false) {
+            Timer::after_millis(500).await;
+        } else {
+            // Opening the dive scene ends the idle wait early
+            let _ = select(
+                Timer::after(crate::dive::PRESSURE_IDLE_INTERVAL),
+                high_rate.changed_and(|on| *on),
+            )
+            .await;
+        }
     }
 }

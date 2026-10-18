@@ -20,7 +20,7 @@ pub async fn batt_voltage_monitor_task(
     power_good_pin: Peri<'static, PC0>,
     charge_status_pin: Peri<'static, PC5>,
     bat_mon_en_pin: Peri<'static, PC2>,
-    adc1: Peri<'static, ADC1>,
+    mut adc1: Peri<'static, ADC1>,
     mut adc_pin: Peri<'static, PC1>,
     state: &'static RwLock<ThreadModeRawMutex, state::State>,
     dma1_ch1: Peri<'static, DMA2_CH3>,
@@ -29,16 +29,17 @@ pub async fn batt_voltage_monitor_task(
     let power_good = Input::new(power_good_pin, Pull::Up);
     let charge_status = Input::new(charge_status_pin, Pull::Up);
     
-    let mut config = AdcConfig::default();
-    config.resolution = Some(Resolution::BITS12);
-    config.averaging = Some(Averaging::Samples256);
-    config.oversampling_shift = Some(OversamplingShift::SHIFT8);
-    config.oversampling_ratio = Some(OversamplingRatio::RATIO8);
-    let mut adc_bat_v = Adc::new_with_config(adc1, config);
+    // The ADC is started for each reading and powered down after it: while
+    // its clock is on it keeps the chip out of STOP mode
+    let adc_config = || {
+        let mut config = AdcConfig::default();
+        config.resolution = Some(Resolution::BITS12);
+        config.averaging = Some(Averaging::Samples256);
+        config.oversampling_shift = Some(OversamplingShift::SHIFT8);
+        config.oversampling_ratio = Some(OversamplingRatio::RATIO8);
+        config
+    };
     let mut bat_mon_en = Output::new(bat_mon_en_pin, Level::Low, Speed::VeryHigh);
-
-    let mut vrefint_channel = adc_bat_v.enable_vrefint();
-    Timer::after_millis(500).await;
 
     // Truncate to 2 decimal places
     let clamp_to_2_decimals = |value: f32| -> f32 {
@@ -71,16 +72,27 @@ pub async fn batt_voltage_monitor_task(
             continue;
         }
 
-        // Read VREFINT to calculate actual VDDA
-        // This compensates for supply voltage variations
-        let vrefint = adc_bat_v.blocking_read(&mut vrefint_channel, SampleTime::CYCLES2_5);
-        
-        // Calculate actual VDDA using: VDDA = VREFINT_CALIB_MV × (VREFINT_CAL / VREFINT_DATA)
-        let vdda_actual_mv = VREFINT_CALIB_MV * (vrefint_cal as f32 / vrefint as f32);
-
+        // Let the divider settle before the ADC is powered
         bat_mon_en.set_high();
         Timer::after_millis(500).await;
-        let measured = adc_bat_v.blocking_read(&mut adc_pin, SampleTime::CYCLES2_5);
+
+        let (vrefint, measured) = {
+            let mut adc_bat_v = Adc::new_with_config(adc1.reborrow(), adc_config());
+            let mut vrefint_channel = adc_bat_v.enable_vrefint();
+            // VREFINT needs up to 12 us to start
+            Timer::after_millis(1).await;
+            // Read VREFINT to calculate actual VDDA
+            // This compensates for supply voltage variations
+            let vrefint = adc_bat_v.blocking_read(&mut vrefint_channel, SampleTime::CYCLES2_5);
+            let measured = adc_bat_v.blocking_read(&mut adc_pin, SampleTime::CYCLES2_5);
+            adc_bat_v.power_down();
+            (vrefint, measured)
+        };
+
+        // Calculate actual VDDA using: VDDA = VREFINT_CALIB_MV × (VREFINT_CAL / VREFINT_DATA)
+        let vdda_actual_mv = VREFINT_CALIB_MV * (vrefint_cal as f32 / vrefint as f32);
+        #[cfg(feature = "flash-selftest")]
+        info!("[FlashSelftest] VDDA {} mV", vdda_actual_mv);
 
         // Convert ADC reading to voltage using calibrated VDDA
         let v_adc_mv: f32 = (measured as f32 / ADC_MAX_COUNT) * vdda_actual_mv;
@@ -109,6 +121,13 @@ pub async fn batt_voltage_monitor_task(
             state.low_batt = low_batt.is_low();
         }
         LCD_WAKE.signal(());
-        Timer::after_secs(1).await;
+        // The voltage changes slowly; each reading wakes the chip twice
+        let interval = if crate::dive::HIGH_RATE.try_get().unwrap_or(false) { DIVE_INTERVAL } else { IDLE_INTERVAL };
+        Timer::after(interval).await;
     }
 }
+
+/// Between battery readings at the surface.
+const IDLE_INTERVAL: embassy_time::Duration = embassy_time::Duration::from_secs(30);
+/// Between battery readings during a dive.
+const DIVE_INTERVAL: embassy_time::Duration = embassy_time::Duration::from_secs(10);

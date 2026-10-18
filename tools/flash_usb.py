@@ -100,17 +100,25 @@ def wait_usb(pid: int, timeout_s: float):
     return None
 
 
-def find_app_tty() -> str | None:
+# USB interface of the app's command port. Built with the `usb-log` feature,
+# the app has a second serial port for defmt logs at LOG_INTERFACE.
+COMMAND_INTERFACE = 0
+LOG_INTERFACE = 2
+
+
+def find_app_tty(interface: int = COMMAND_INTERFACE) -> str | None:
     for name in sorted(os.listdir("/sys/class/tty")):
         if not name.startswith("ttyACM"):
             continue
-        dev = os.path.realpath(f"/sys/class/tty/{name}/device/..")
+        intf = os.path.realpath(f"/sys/class/tty/{name}/device")
+        dev = os.path.dirname(intf)
         try:
             vid = open(f"{dev}/idVendor").read().strip()
             pid = open(f"{dev}/idProduct").read().strip()
+            number = open(f"{intf}/bInterfaceNumber").read().strip()
         except OSError:
             continue
-        if int(vid, 16) == USB_VID and int(pid, 16) == APP_PID:
+        if int(vid, 16) == USB_VID and int(pid, 16) == APP_PID and int(number, 16) == interface:
             return f"/dev/{name}"
     return None
 

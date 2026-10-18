@@ -6,9 +6,17 @@ use embassy_stm32::time::Hertz;
 use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex;
 use embassy_sync::mutex::Mutex;
 use embassy_sync::rwlock::RwLock;
-use embassy_time::{Duration, Timer, WithTimeout};
+use embassy_time::{Duration, Instant, Timer, WithTimeout};
 use embedded_sdmmc::asynchronous::{Block, BlockCount, BlockDevice, BlockIdx, Mode, VolumeIdx, VolumeManager};
 use crate::state;
+
+/// Between attempts to find a card at the surface.
+const NO_CARD_RETRY: Duration = Duration::from_secs(60);
+
+/// Sensor log on the SD card; FAT needs an 8.3 name.
+const LOG_FILE: &str = "LOG.CSV";
+/// Units: ms since boot, mbar, °C, m/s².
+const CSV_HEADER: &[u8] = b"uptime_ms,pressure_mbar,temperature_c,accel_x,accel_y,accel_z\n";
 
 pub struct TimeSource;
 
@@ -55,7 +63,18 @@ impl<'a> SDMMCDevice<'a> {
                     _err = Some(e);
                 }
             }
-            Timer::after(Duration::from_millis(1000)).await;
+            // Without a card each attempt keeps the chip awake for up to
+            // 100 ms: retry often only during a dive, when logging needs it
+            let mut high_rate = crate::dive::HIGH_RATE.receiver().unwrap();
+            if high_rate.try_get().unwrap_or(false) {
+                Timer::after(Duration::from_millis(1000)).await;
+            } else {
+                let _ = embassy_futures::select::select(
+                    Timer::after(NO_CARD_RETRY),
+                    high_rate.changed_and(|on| *on),
+                )
+                .await;
+            }
         }
 
         let card = unwrap!(sdmmc.card());
@@ -118,22 +137,37 @@ pub async fn sd_card_task(sdmmc: &'static Mutex<ThreadModeRawMutex, Sdmmc<'stati
     info!("Root dir: {:#?}", Debug2Format(&root_dir));
 
 
-    let mut file = root_dir.open_file_in_dir("test.txt", Mode::ReadWriteCreateOrAppend).await.unwrap();
+    let mut file = root_dir.open_file_in_dir(LOG_FILE, Mode::ReadWriteCreateOrAppend).await.unwrap();
+    if file.length() == 0 {
+        file.write(CSV_HEADER).await.unwrap();
+        file.flush().await.unwrap();
+    }
 
+    let mut high_rate = crate::dive::HIGH_RATE.receiver().unwrap();
     loop {
+        // Log only during a dive
+        high_rate.get_and(|on| *on).await;
         Timer::after_secs(1).await;
         let read_state: state::State;
         {
             let guard = state.read().await;
             read_state = guard.clone();
         }
-        let mut buf = [0u8; 64];
-        let text = format_no_std::show(&mut buf, format_args!("{:.5}\n{:.1}\n", read_state.pressure, read_state.temperature)).unwrap();
-        file.write(&text.as_bytes()).await.unwrap();
-        let accel = format_no_std::show(&mut buf, format_args!("Accel(m/s²): {:.2}, {:.2}, {:.2}\n", read_state.accel_x, read_state.accel_y, read_state.accel_z)).unwrap();
-        file.write(&accel.as_bytes()).await.unwrap();
-        let gyro = format_no_std::show(&mut buf, format_args!("Gyro(rad/s): {:.2}, {:.2}, {:.2}\n", read_state.gyro_x, read_state.gyro_y, read_state.gyro_z)).unwrap();
-        file.write(&gyro.as_bytes()).await.unwrap();
+        let mut buf = [0u8; 128];
+        let row = format_no_std::show(
+            &mut buf,
+            format_args!(
+                "{},{:.5},{:.1},{:.2},{:.2},{:.2}\n",
+                Instant::now().as_millis(),
+                read_state.pressure,
+                read_state.temperature,
+                read_state.accel_x,
+                read_state.accel_y,
+                read_state.accel_z,
+            ),
+        )
+        .unwrap();
+        file.write(row.as_bytes()).await.unwrap();
         file.flush().await.unwrap();
 
         // TODO: find a way to catch communication error with the SD card

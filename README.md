@@ -1,141 +1,82 @@
-# `cortex-m-quickstart`
+# Dive computer firmware
 
-> A template for building applications for ARM Cortex-M microcontrollers
+Firmware for a homemade wrist dive computer, written in Rust with
+[embassy](https://embassy.dev) on an STM32L476RG.
 
-This project is developed and maintained by the [Cortex-M team][team].
+> **Warning:** This is a hobby prototype. It is not tested or certified for real
+> dives. Do not use it to plan or run a dive. See `TODO.md` for the missing
+> safety features (alarms, tissue persistence across reboots, watchdog).
 
-## Dependencies
+## Features
 
-To build embedded programs using this template you'll need:
+- Bühlmann ZH-L16C decompression with user-set gradient factors (air only),
+  via the `dive-computer-deco` crate: NDL, ceiling, deco stops, TTS
+- Automatic dive start and end from the pressure sensor
+- Dive, tissues, settings and startup screens on a 320×240 ILI9341 LCD
+  (rendered by `dive-computer-gfx`), with two buttons
+- Tilt-compensated compass from the IMU and magnetometer
+- Sensor log (time, pressure, temperature, acceleration) as CSV on the SD card
+  during dives
+- Low-power mode: sensors poll slowly at the surface, the screen turns off
+  after inactivity and the MCU sleeps in STOP2 (about 1.1–1.5 mA)
+- Battery voltage monitor and adjustable backlight
+- USB bootloader with rollback, and optional defmt logs over USB (see below)
 
-- Rust 1.31, 1.30-beta, nightly-2018-09-13 or a newer toolchain. e.g. `rustup
-  default beta`
+## Hardware
 
-- The `cargo generate` subcommand. [Installation
-  instructions](https://github.com/ashleygwilliams/cargo-generate#installation).
+| Part | Use |
+| --- | --- |
+| STM32L476RG | MCU (Cortex-M4F, 1 MiB flash, 128 KiB RAM) |
+| MS5837-30BA | Depth and water temperature |
+| ISM330DHCX | Accelerometer and gyroscope (also wakes the device) |
+| MMC5983MA | Magnetometer |
+| ILI9341 | 320×240 SPI LCD with PWM backlight |
+| SD card (SDMMC) | Dive sensor log |
+| QSPI flash | Settings and timestamps (not working on the current board) |
+| BlueNRG-M0A | BLE (not usable on the v3 board, disabled) |
+| Buzzer, 2 buttons, battery ADC, USB-C | User interface and power |
 
-- `rust-std` components (pre-compiled `core` crate) for the ARM Cortex-M
-  targets. Run:
+The board design lives in the `dive-watch` repository.
 
-``` console
-$ rustup target add thumbv6m-none-eabi thumbv7m-none-eabi thumbv7em-none-eabi thumbv7em-none-eabihf
-```
+## Repository layout
 
-## Using this template
+- `src/main.rs`: clock, peripheral and task setup
+- `src/dive.rs`: feeds pressure into the deco tracker once a second
+- `src/state.rs`: shared state between tasks and the screen
+- `src/tasks/`: one embassy task per peripheral (buttons, buzzer, SD card,
+  IMU, battery, USB, backlight)
+- `src/ms5837.rs`, `src/ili9341.rs`, ...: sensor and display drivers
+- `bootloader/`: USB bootloader and its update protocol crate
+- `tools/`: host scripts to flash over USB and read USB logs
+- `docs/`: design specs and implementation plans
 
-**NOTE**: This is the very short version that only covers building programs. For
-the long version, which additionally covers flashing, running and debugging
-programs, check [the embedded Rust book][book].
+## Building
 
-[book]: https://rust-embedded.github.io/book
+The build expects these sibling checkouts next to this repository:
 
-0. Before we begin you need to identify some characteristics of the target
-  device as these will be used to configure the project:
+- `../embassy` (fork with STM32L4 low-power and USB fixes)
+- `../dive-computer-deco` (decompression model)
+- `../dive-computer-gfx` (UI scenes)
+- `../dive-computer-proto` (message protocol)
 
-- The ARM core. e.g. Cortex-M3.
+The toolchain is pinned in `rust-toolchain.toml`. `nix develop` gives a shell
+with the toolchain, `probe-rs` and the Python tools. Then:
 
-- Does the ARM core include an FPU? Cortex-M4**F** and Cortex-M7**F** cores do.
+    cargo build --release
 
-- How much Flash memory and RAM does the target device has? e.g. 256 KiB of
-  Flash and 32 KiB of RAM.
+Flash and run with a debug probe (logs over RTT):
 
-- Where are Flash memory and RAM mapped in the address space? e.g. RAM is
-  commonly located at address `0x2000_0000`.
+    cargo run --release
 
-You can find this information in the data sheet or the reference manual of your
-device.
+### Cargo features
 
-In this example we'll be using the STM32F3DISCOVERY. This board contains an
-STM32F303VCT6 microcontroller. This microcontroller has:
-
-- A Cortex-M4F core that includes a single precision FPU
-
-- 256 KiB of Flash located at address 0x0800_0000.
-
-- 40 KiB of RAM located at address 0x2000_0000. (There's another RAM region but
-  for simplicity we'll ignore it).
-
-1. Instantiate the template.
-
-``` console
-$ cargo generate --git https://github.com/rust-embedded/cortex-m-quickstart
- Project Name: app
- Creating project called `app`...
- Done! New project created /tmp/app
-
-$ cd app
-```
-
-2. Set a default compilation target. There are four options as mentioned at the
-   bottom of `.cargo/config`. For the STM32F303VCT6, which has a Cortex-M4F
-   core, we'll pick the `thumbv7em-none-eabihf` target.
-
-``` console
-$ tail -n9 .cargo/config.toml
-```
-
-``` toml
-[build]
-# Pick ONE of these compilation targets
-# target = "thumbv6m-none-eabi"    # Cortex-M0 and Cortex-M0+
-# target = "thumbv7m-none-eabi"    # Cortex-M3
-# target = "thumbv7em-none-eabi"   # Cortex-M4 and Cortex-M7 (no FPU)
-target = "thumbv7em-none-eabihf" # Cortex-M4F and Cortex-M7F (with FPU)
-# target = "thumbv8m.base-none-eabi"   # Cortex-M23
-# target = "thumbv8m.main-none-eabi"   # Cortex-M33 (no FPU)
-# target = "thumbv8m.main-none-eabihf" # Cortex-M33 (with FPU)
-```
-
-3. Enter the memory region information into the `memory.x` file.
-
-``` console
-$ cat memory.x
-/* Linker script for the STM32F303VCT6 */
-MEMORY
-{
-  /* NOTE 1 K = 1 KiBi = 1024 bytes */
-  FLASH : ORIGIN = 0x08000000, LENGTH = 256K
-  RAM : ORIGIN = 0x20000000, LENGTH = 40K
-}
-```
-
-4. Build the template application or one of the examples.
-
-``` console
-$ cargo build
-```
-
-## VS Code
-
-This template includes launch configurations for debugging CortexM programs with Visual Studio Code located in the `.vscode/` directory.  
-See [.vscode/README.md](./.vscode/README.md) for more information.  
-If you're not using VS Code, you can safely delete the directory from the generated project.
-
-# License
-
-This template is licensed under either of
-
-- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or
-  http://www.apache.org/licenses/LICENSE-2.0)
-
-- MIT license ([LICENSE-MIT](LICENSE-MIT) or http://opensource.org/licenses/MIT)
-
-at your option.
-
-## Contribution
-
-Unless you explicitly state otherwise, any contribution intentionally submitted
-for inclusion in the work by you, as defined in the Apache-2.0 license, shall be
-dual licensed as above, without any additional terms or conditions.
-
-## Code of Conduct
-
-Contribution to this crate is organized under the terms of the [Rust Code of
-Conduct][CoC], the maintainer of this crate, the [Cortex-M team][team], promises
-to intervene to uphold that code of conduct.
-
-[CoC]: https://www.rust-lang.org/policies/code-of-conduct
-[team]: https://github.com/rust-embedded/wg#the-cortex-m-team
+| Feature | Effect |
+| --- | --- |
+| `sim-dive` | Replace sensor pressure with a simulated deco dive at 10× speed |
+| `raw-pressure` | Show raw pressure in mbar in place of TTS on the dive screen |
+| `usb-log` | Send defmt logs over a second USB serial port instead of RTT |
+| `no-confirm` | Never confirm a new image, so the bootloader rolls back on reset |
+| `flash-selftest` | At boot, erase and program a spare QSPI sector and log the result |
 
 ## Flashing over USB-C
 
@@ -149,7 +90,7 @@ One-time setup with a debug probe:
 Then build and flash the app over USB:
 
     cargo build --release
-    nix develop -c sudo tools/flash_usb.py
+    nix develop -c tools/flash_usb.py
 
 The tool asks the running app to reboot into the bootloader, uploads the image, and waits
 for the new app to come back. A new image that fails during startup is rolled back on the
@@ -160,3 +101,16 @@ bootloader stays in update mode (`lsusb` shows `c0de:b007`) and the tool works a
 
 Flashing the app with `cargo run --release` (probe-rs) still works and leaves the
 bootloader in place.
+
+## Logs over USB
+
+Built with the `usb-log` feature, the app sends its defmt logs over a second USB serial
+port instead of RTT. Read and decode them with:
+
+    cargo build --release --features usb-log
+    nix develop -c tools/usb_log.py
+
+The tool reads the log endpoint through libusb rather than `/dev/ttyACM*`, so the
+buffered boot logs survive (a freshly opened tty is in cooked mode and mangles them). It
+needs `defmt-print` (`cargo install defmt-print`) and the ELF of the firmware on the
+device, and reconnects after a reset or replug. Panics only reach RTT.
